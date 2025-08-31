@@ -42,3 +42,4 @@ dbscan_tests
 # Temporary files
 *.tmp
 *.temp
+.cache/

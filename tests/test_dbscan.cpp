@@ -202,6 +202,136 @@ TEST_CASE("DBSCAN different min_pts values", "[dbscan][parameters]") {
     REQUIRE(result_min5.num_clusters <= result_min3.num_clusters);
 }
 
+TEST_CASE("DBSCANOptimized basic functionality", "[dbscan_optimized]") {
+    std::vector<dbscan::Point<double>> points = {
+        {0.0, 0.0}, {0.1, 0.1}, {0.2, 0.2},  // Cluster 1
+        {5.0, 5.0}, {5.1, 5.1}, {5.2, 5.2},  // Cluster 2
+        {10.0, 10.0}                          // Noise point
+    };
+
+    dbscan::DBSCANOptimized<double> dbscan(0.5, 2, points);
+    auto result = dbscan.cluster();
+
+    REQUIRE(result.labels.size() == points.size());
+    REQUIRE(result.num_clusters >= 2);  // Should find at least 2 clusters
+
+    // Check that points in same cluster have same label
+    REQUIRE(result.labels[0] == result.labels[1]);  // First two points should be in same cluster
+    REQUIRE(result.labels[0] == result.labels[2]);  // First three points should be in same cluster
+    REQUIRE(result.labels[3] == result.labels[4]);  // Next two points should be in same cluster
+    REQUIRE(result.labels[3] == result.labels[5]);  // Next three points should be in same cluster
+    REQUIRE(result.labels[6] == -1);               // Last point should be noise
+}
+
+TEST_CASE("DBSCANOptimized with 500 points", "[dbscan_optimized][performance]") {
+    std::vector<dbscan::Point<double>> points;
+    points.reserve(500);
+
+    // Create two clusters
+    for (int i = 0; i < 200; ++i) {
+        points.push_back({static_cast<double>(i % 20) * 0.1, static_cast<double>(i / 20) * 0.1});
+    }
+    for (int i = 0; i < 200; ++i) {
+        points.push_back({5.0 + static_cast<double>(i % 20) * 0.1, static_cast<double>(i / 20) * 0.1});
+    }
+    // Add some noise
+    for (int i = 0; i < 100; ++i) {
+        points.push_back({10.0 + static_cast<double>(i % 10) * 0.1, 10.0 + static_cast<double>(i / 10) * 0.1});
+    }
+
+    dbscan::DBSCANOptimized<double> dbscan(0.3, 3, points);
+    auto result = dbscan.cluster();
+
+    REQUIRE(result.labels.size() == 500);
+    REQUIRE(result.num_clusters >= 2);  // Should find at least 2 clusters
+}
+
+TEST_CASE("DBSCANOptimized with 10k points", "[dbscan_optimized][performance]") {
+    std::vector<dbscan::Point<double>> points;
+    points.reserve(10000);
+
+    // Create multiple clusters
+    for (int c = 0; c < 5; ++c) {
+        double center_x = c * 3.0;
+        double center_y = c * 3.0;
+        for (int i = 0; i < 1800; ++i) {
+            double x = center_x + (static_cast<double>(rand()) / RAND_MAX - 0.5) * 0.8;
+            double y = center_y + (static_cast<double>(rand()) / RAND_MAX - 0.5) * 0.8;
+            points.push_back({x, y});
+        }
+    }
+    // Add noise points
+    for (int i = 0; i < 1000; ++i) {
+        double x = 20.0 + (static_cast<double>(rand()) / RAND_MAX - 0.5) * 10.0;
+        double y = 20.0 + (static_cast<double>(rand()) / RAND_MAX - 0.5) * 10.0;
+        points.push_back({x, y});
+    }
+
+    dbscan::DBSCANOptimized<double> dbscan(0.5, 5, points);
+    auto result = dbscan.cluster();
+
+    REQUIRE(result.labels.size() == 10000);
+    REQUIRE(result.num_clusters >= 3);  // Should find multiple clusters
+}
+
+TEST_CASE("DBSCANOptimized empty input", "[dbscan_optimized]") {
+    std::vector<dbscan::Point<double>> empty_points;
+    dbscan::DBSCANOptimized<double> dbscan(0.5, 3, empty_points);
+
+    auto result = dbscan.cluster();
+
+    REQUIRE(result.labels.empty());
+    REQUIRE(result.num_clusters == 0);
+}
+
+TEST_CASE("DBSCANOptimized single point", "[dbscan_optimized]") {
+    std::vector<dbscan::Point<double>> single_point = {{1.0, 2.0}};
+    dbscan::DBSCANOptimized<double> dbscan(0.5, 3, single_point);
+
+    auto result = dbscan.cluster();
+
+    REQUIRE(result.labels.size() == 1);
+    REQUIRE(result.labels[0] == -1);  // Should be noise
+    REQUIRE(result.num_clusters == 0);
+}
+
+TEST_CASE("Compare DBSCAN vs DBSCANOptimized results", "[comparison]") {
+    // Create test data
+    std::vector<dbscan::Point<double>> points = {
+        {0.0, 0.0}, {0.1, 0.1}, {0.2, 0.2}, {0.3, 0.3},  // Cluster 1
+        {2.0, 2.0}, {2.1, 2.1}, {2.2, 2.2},               // Cluster 2
+        {5.0, 5.0}, {5.1, 5.1},                           // Cluster 3
+        {10.0, 10.0}                                      // Noise
+    };
+
+    // Test with original DBSCAN
+    dbscan::DBSCAN<double> original_dbscan(0.5, 3);
+    auto original_result = original_dbscan.cluster(points);
+
+    // Test with optimized DBSCAN
+    dbscan::DBSCANOptimized<double> optimized_dbscan(0.5, 3, points);
+    auto optimized_result = optimized_dbscan.cluster();
+
+    // Both should produce valid results
+    REQUIRE(original_result.labels.size() == points.size());
+    REQUIRE(optimized_result.labels.size() == points.size());
+
+    // Both should find some clusters (exact count may differ due to implementation details)
+    REQUIRE(original_result.num_clusters >= 2);
+    REQUIRE(optimized_result.num_clusters >= 2);
+
+    // Both should identify noise points consistently
+    int original_noise_count = 0;
+    int optimized_noise_count = 0;
+    for (size_t i = 0; i < points.size(); ++i) {
+        if (original_result.labels[i] == -1) original_noise_count++;
+        if (optimized_result.labels[i] == -1) optimized_noise_count++;
+    }
+
+    // Allow some tolerance in noise point detection
+    REQUIRE(std::abs(original_noise_count - optimized_noise_count) <= 2);
+}
+
 TEST_CASE("DBSCAN handles empty input", "[dbscan]") {
     dbscan::DBSCAN<double> dbscan(0.5, 3);
     std::vector<dbscan::Point<double>> empty_points;

@@ -28,7 +28,7 @@ private:
 public:
     ThreadPool(size_t num_threads = 4) : stop(false) {
         for (size_t i = 0; i < num_threads; ++i) {
-            workers.push_back(std::thread(worker_function, this));
+            workers.push_back(std::thread(worker_function, (void*)this));
         }
     }
 
@@ -85,7 +85,8 @@ private:
     }
 };
 
-void worker_function(ThreadPool* pool) {
+void worker_function(void* pool_ptr) {
+    ThreadPool* pool = static_cast<ThreadPool*>(pool_ptr);
     while (true) {
         void (*task)() = nullptr;
         {

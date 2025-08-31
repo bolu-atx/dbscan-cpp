@@ -28,14 +28,24 @@ target_compile_options(dbscan PRIVATE
     -O3
 )
 
-# Tests
+# Dependencies
 include(FetchContent)
+
+# Catch2 for testing
 FetchContent_Declare(
     Catch2
     GIT_REPOSITORY https://github.com/catchorg/Catch2.git
     GIT_TAG v3.4.0
 )
 FetchContent_MakeAvailable(Catch2)
+
+# nanobench for benchmarking
+FetchContent_Declare(
+    nanobench
+    GIT_REPOSITORY https://github.com/martinus/nanobench.git
+    GIT_TAG v4.3.11
+)
+FetchContent_MakeAvailable(nanobench)
 
 add_executable(dbscan_tests
     tests/test_dbscan.cpp
@@ -48,6 +58,22 @@ target_link_libraries(dbscan_tests
 )
 
 target_include_directories(dbscan_tests
+    PRIVATE
+        include
+)
+
+# Benchmark executable
+add_executable(dbscan_benchmark
+    benchmark/benchmark_dbscan.cpp
+)
+
+target_link_libraries(dbscan_benchmark
+    PRIVATE
+        dbscan
+        nanobench
+)
+
+target_include_directories(dbscan_benchmark
     PRIVATE
         include
 )

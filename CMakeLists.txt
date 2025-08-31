@@ -73,6 +73,10 @@ target_link_libraries(dbscan_benchmark
         nanobench
 )
 
+# Note: ThreadPool is not currently used in the optimized implementation
+# It was designed for parallel processing but the current implementation
+# uses sequential processing for simplicity and correctness
+
 target_include_directories(dbscan_benchmark
     PRIVATE
         include

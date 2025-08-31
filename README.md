@@ -1,5 +1,8 @@
 # DBSCAN C++ Implementation
 
+[![CI](https://github.com/bolu-atx/dbscan-cpp/actions/workflows/ci.yml/badge.svg)](https://github.com/bolu-atx/dbscan-cpp/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A high-performance, templated C++20 implementation of the DBSCAN (Density-Based Spatial Clustering of Applications with Noise) algorithm.
 
 ## Features

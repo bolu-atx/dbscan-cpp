@@ -321,8 +321,8 @@ TEST_CASE("Compare DBSCAN vs DBSCANOptimized results", "[comparison]") {
   auto original_result = original_dbscan.cluster(points);
 
   // Test with optimized DBSCAN
-  dbscan::DBSCANOptimized<double> optimized_dbscan(0.5, 2, points);
-  auto optimized_result = optimized_dbscan.cluster();
+  dbscan::DBSCANOptimized<double> optimized_dbscan(0.5, 2);
+  auto optimized_result = optimized_dbscan.cluster(points);
 
   // Both should produce valid results
   REQUIRE(original_result.labels.size() == points.size());

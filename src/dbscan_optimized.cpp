@@ -1,140 +1,164 @@
 #include "dbscan_optimized.h"
-#include <algorithm>
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
 
 namespace dbscan {
 
-template <typename T> ClusterResult<T> DBSCANOptimized<T>::cluster() {
-  if (points_.empty()) {
+template <typename T> ClusterResult<T> DBSCANOptimized<T>::cluster(const std::vector<Point<T>> &points) const {
+  const int32_t n_points = points.size();
+  if (n_points == 0) {
     return {{}, 0};
   }
+  const T epsilon_sq = eps_ * eps_;
 
-  // Step 1: Find core points in parallel
-  std::vector<bool> is_core = find_core_points();
+  // Internal structure for processing
+  struct WorkingPoint {
+    T x, y;
+    int32_t cluster_id = -1;
+    int32_t cell_id = -1;
+    bool is_core = false;
+  };
 
-  // Step 2: Process core-core connections using union-find
-  UnionFind<T> uf(points_.size());
-  process_core_core_connections(is_core, uf);
-
-  // Step 3: Assign border points
-  std::vector<int32_t> labels = assign_border_points(is_core, uf);
-
-  // Step 4: Count clusters
-  int32_t num_clusters = count_clusters(uf);
-
-  return {labels, num_clusters};
-}
-
-template <typename T> std::vector<bool> DBSCANOptimized<T>::find_core_points() const {
-  std::vector<bool> is_core(points_.size(), false);
-
-  // TODO: Replace sequential processing with parallel execution using std::execution::par
-  // TODO: Consider SIMD vectorization for neighbor counting
-  std::for_each(points_.begin(), points_.end(), [&](const Point<T> &point) {
-    size_t idx = &point - &points_[0];
-    auto neighbors = get_neighbors(idx);
-    if (static_cast<int32_t>(neighbors.size()) >= min_pts_) {
-      is_core[idx] = true;
-    }
-  });
-
-  return is_core;
-}
-
-template <typename T> std::vector<size_t> DBSCANOptimized<T>::get_neighbors(size_t point_idx) const {
-  std::vector<size_t> neighbors;
-  const Point<T> &target = points_[point_idx];
-  T eps_squared = eps_ * eps_;
-
-  // Get cell coordinates for the target point
-  std::pair<size_t, size_t> cell_coords = grid_.get_cell_coords(target);
-  size_t cell_x = cell_coords.first;
-  size_t cell_y = cell_coords.second;
-
-  // Check neighboring cells
-  auto neighbor_cells = grid_.get_neighbor_cells(cell_x, cell_y);
-
-  // TODO: Reserve vector capacity based on estimated neighbor count to avoid reallocations
-  // TODO: Consider early termination when min_pts neighbors are found (for core point detection)
-
-  for (auto &cell_coords : neighbor_cells) {
-    size_t cx = cell_coords.first;
-    size_t cy = cell_coords.second;
-
-    std::vector<size_t> cell_points = grid_.get_points_in_cell(cx, cy);
-
-    for (size_t neighbor_idx : cell_points) {
-      if (neighbor_idx == point_idx)
-        continue;
-
-      T dist_sq = distance_squared(target, points_[neighbor_idx]);
-      if (dist_sq <= eps_squared) {
-        neighbors.push_back(neighbor_idx);
-      }
-    }
+  std::vector<WorkingPoint> working_points(n_points);
+  for (int32_t i = 0; i < n_points; ++i) {
+    working_points[i].x = points[i].x;
+    working_points[i].y = points[i].y;
   }
 
-  return neighbors;
-}
+  // Step 1: Grid Indexing
+  T min_x = working_points[0].x, max_x = working_points[0].x;
+  T min_y = working_points[0].y, max_y = working_points[0].y;
+  for (int32_t i = 1; i < n_points; ++i) {
+    min_x = std::min(min_x, working_points[i].x);
+    max_x = std::max(max_x, working_points[i].x);
+    min_y = std::min(min_y, working_points[i].y);
+    max_y = std::max(max_y, working_points[i].y);
+  }
 
-template <typename T>
-void DBSCANOptimized<T>::process_core_core_connections(const std::vector<bool> &is_core, UnionFind<T> &uf) const {
-  // TODO: Replace sequential processing with parallel union-find operations
-  // TODO: Consider path compression optimization in UnionFind::find()
-  // TODO: Batch union operations to reduce locking overhead in concurrent scenarios
-  std::for_each(points_.begin(), points_.end(), [&](const Point<T> &point) {
-    size_t idx = &point - &points_[0];
-    if (!is_core[idx])
-      return;
+  const int32_t cells_x = static_cast<int32_t>((max_x - min_x) / eps_) + 1;
+  const int32_t cells_y = static_cast<int32_t>((max_y - min_y) / eps_) + 1;
+  const int32_t num_cells = cells_x * cells_y;
+  std::vector<std::vector<int32_t>> grid(num_cells);
 
-    auto neighbors = get_neighbors(idx);
-    for (size_t neighbor_idx : neighbors) {
-      if (is_core[neighbor_idx] && neighbor_idx > idx) {
-        uf.union_sets(static_cast<int32_t>(idx), static_cast<int32_t>(neighbor_idx));
+  for (int32_t i = 0; i < n_points; ++i) {
+    int32_t cx = static_cast<int32_t>((working_points[i].x - min_x) / eps_);
+    int32_t cy = static_cast<int32_t>((working_points[i].y - min_y) / eps_);
+    working_points[i].cell_id = cx + cy * cells_x;
+  }
+
+  for (int32_t i = 0; i < n_points; ++i) {
+    grid[working_points[i].cell_id].push_back(i);
+  }
+
+  // Step 2: Core Point Detection (parallel)
+  tbb::parallel_for(tbb::blocked_range<int32_t>(0, n_points), [&](const tbb::blocked_range<int32_t> &r) {
+    for (int32_t i = r.begin(); i < r.end(); ++i) {
+      int32_t neighbor_count = 0;
+      int32_t cx = working_points[i].cell_id % cells_x;
+      int32_t cy = working_points[i].cell_id / cells_x;
+
+      for (int32_t dx = -1; dx <= 1; ++dx) {
+        for (int32_t dy = -1; dy <= 1; ++dy) {
+          int32_t neighbor_cx = cx + dx;
+          int32_t neighbor_cy = cy + dy;
+
+          if (neighbor_cx >= 0 && neighbor_cx < cells_x && neighbor_cy >= 0 && neighbor_cy < cells_y) {
+            int32_t neighbor_cell_id = neighbor_cx + neighbor_cy * cells_x;
+            for (int32_t neighbor_idx : grid[neighbor_cell_id]) {
+              if (neighbor_idx == i)
+                continue;
+              T dist_sq = distance_squared(points[i], points[neighbor_idx]);
+              if (dist_sq <= epsilon_sq) {
+                neighbor_count++;
+              }
+            }
+          }
+        }
+      }
+      if (neighbor_count >= min_pts_) {
+        working_points[i].is_core = true;
       }
     }
   });
-}
 
-template <typename T>
-std::vector<int32_t> DBSCANOptimized<T>::assign_border_points(const std::vector<bool> &is_core,
-                                                              UnionFind<T> &uf) const {
-  std::vector<int32_t> labels(points_.size(), -1);
+  // Step 3: Connected Components (parallel)
+  ConcurrentUnionFind uf(n_points);
+  tbb::parallel_for(tbb::blocked_range<int32_t>(0, n_points), [&](const tbb::blocked_range<int32_t> &r) {
+    for (int32_t i = r.begin(); i < r.end(); ++i) {
+      if (!working_points[i].is_core)
+        continue;
+      int32_t cx = working_points[i].cell_id % cells_x;
+      int32_t cy = working_points[i].cell_id / cells_x;
 
-  // Sequential border point assignment
-  std::for_each(points_.begin(), points_.end(), [&](const Point<T> &point) {
-    size_t idx = &point - &points_[0];
-
-    if (is_core[idx]) {
-      // Core points get their cluster ID
-      labels[idx] = uf.find(static_cast<int32_t>(idx));
-    } else {
-      // Border points: find nearest core point's cluster
-      auto neighbors = get_neighbors(idx);
-      for (size_t neighbor_idx : neighbors) {
-        if (is_core[neighbor_idx]) {
-          labels[idx] = uf.find(static_cast<int32_t>(neighbor_idx));
-          break; // Take first core neighbor found
+      for (int32_t dx = -1; dx <= 1; ++dx) {
+        for (int32_t dy = -1; dy <= 1; ++dy) {
+          int32_t neighbor_cx = cx + dx;
+          int32_t neighbor_cy = cy + dy;
+          if (neighbor_cx >= 0 && neighbor_cx < cells_x && neighbor_cy >= 0 && neighbor_cy < cells_y) {
+            int32_t neighbor_cell_id = neighbor_cx + neighbor_cy * cells_x;
+            for (int32_t neighbor_idx : grid[neighbor_cell_id]) {
+              if (i == neighbor_idx || !working_points[neighbor_idx].is_core)
+                continue;
+              T dist_sq = distance_squared(points[i], points[neighbor_idx]);
+              if (dist_sq <= epsilon_sq) {
+                uf.unite(i, neighbor_idx);
+              }
+            }
+          }
         }
       }
     }
   });
 
-  return labels;
-}
+  // Step 4: Label Clusters (parallel)
+  tbb::parallel_for(tbb::blocked_range<int32_t>(0, n_points), [&](const tbb::blocked_range<int32_t> &r) {
+    for (int32_t i = r.begin(); i < r.end(); ++i) {
+      if (working_points[i].is_core) {
+        working_points[i].cluster_id = uf.find(i);
+      }
+    }
+  });
 
-template <typename T> int32_t DBSCANOptimized<T>::count_clusters(UnionFind<T> &uf) const {
-  std::unordered_set<int32_t> unique_clusters;
+  // Step 5: Assign Border Points (parallel)
+  tbb::parallel_for(tbb::blocked_range<int32_t>(0, n_points), [&](const tbb::blocked_range<int32_t> &r) {
+    for (int32_t i = r.begin(); i < r.end(); ++i) {
+      if (working_points[i].is_core)
+        continue;
+      int32_t cx = working_points[i].cell_id % cells_x;
+      int32_t cy = working_points[i].cell_id / cells_x;
+      for (int32_t dx = -1; dx <= 1; ++dx) {
+        for (int32_t dy = -1; dy <= 1; ++dy) {
+          int32_t neighbor_cx = cx + dx;
+          int32_t neighbor_cy = cy + dy;
+          if (neighbor_cx >= 0 && neighbor_cx < cells_x && neighbor_cy >= 0 && neighbor_cy < cells_y) {
+            int32_t neighbor_cell_id = neighbor_cx + neighbor_cy * cells_x;
+            for (int32_t neighbor_idx : grid[neighbor_cell_id]) {
+              if (working_points[neighbor_idx].is_core) {
+                T dist_sq = distance_squared(points[i], points[neighbor_idx]);
+                if (dist_sq <= epsilon_sq) {
+                  working_points[i].cluster_id = working_points[neighbor_idx].cluster_id;
+                  goto next_point;
+                }
+              }
+            }
+          }
+        }
+      }
+    next_point:;
+    }
+  });
 
-  // TODO: Optimize cluster counting - could use a vector<bool> or bitset for dense cluster IDs
-  // TODO: Consider parallel counting with atomic operations for very large datasets
-  for (size_t i = 0; i < points_.size(); ++i) {
-    int32_t cluster_id = uf.find(static_cast<int32_t>(i));
-    if (cluster_id >= 0) { // Only count non-noise points
-      unique_clusters.insert(cluster_id);
+  // Step 6: Finalize and Return Result
+  std::vector<int32_t> labels(n_points);
+  std::unordered_set<int> cluster_ids;
+  for (int32_t i = 0; i < n_points; ++i) {
+    labels[i] = working_points[i].cluster_id;
+    if (labels[i] != -1) {
+      cluster_ids.insert(static_cast<int>(labels[i]));
     }
   }
 
-  return static_cast<int32_t>(unique_clusters.size());
+  return {labels, static_cast<int32_t>(cluster_ids.size())};
 }
 
 // Explicit template instantiations

@@ -62,8 +62,8 @@ int main() {
 
     // Benchmark optimized DBSCAN
     bench.title("Optimized DBSCAN").run("Optimized DBSCAN " + std::to_string(n_points) + " points", [&]() {
-      dbscan::DBSCANOptimized<double> dbscan(0.8, 5, points);
-      auto result = dbscan.cluster();
+      dbscan::DBSCANOptimized<double> dbscan(0.8, 5);
+      auto result = dbscan.cluster(points);
       ankerl::nanobench::doNotOptimizeAway(result);
     });
 
@@ -72,8 +72,8 @@ int main() {
       dbscan::DBSCAN<double> original_dbscan(0.8, 5);
       auto original_result = original_dbscan.cluster(points);
 
-      dbscan::DBSCANOptimized<double> optimized_dbscan(0.8, 5, points);
-      auto optimized_result = optimized_dbscan.cluster();
+      dbscan::DBSCANOptimized<double> optimized_dbscan(0.8, 5);
+      auto optimized_result = optimized_dbscan.cluster(points);
 
       std::cout << "Original DBSCAN found " << original_result.num_clusters << " clusters" << std::endl;
       std::cout << "Optimized DBSCAN found " << optimized_result.num_clusters << " clusters" << std::endl;
@@ -90,8 +90,8 @@ int main() {
 
   for (double eps : eps_values) {
     bench.title("EPS Parameter").run("Optimized DBSCAN eps=" + std::to_string(eps), [&]() {
-      dbscan::DBSCANOptimized<double> dbscan(eps, 5, test_points);
-      auto result = dbscan.cluster();
+      dbscan::DBSCANOptimized<double> dbscan(eps, 5);
+      auto result = dbscan.cluster(test_points);
       ankerl::nanobench::doNotOptimizeAway(result);
     });
   }
@@ -101,8 +101,8 @@ int main() {
 
   for (int min_pts : min_pts_values) {
     bench.title("MinPts Parameter").run("Optimized DBSCAN min_pts=" + std::to_string(min_pts), [&]() {
-      dbscan::DBSCANOptimized<double> dbscan(0.8, min_pts, test_points);
-      auto result = dbscan.cluster();
+      dbscan::DBSCANOptimized<double> dbscan(0.8, min_pts);
+      auto result = dbscan.cluster(test_points);
       ankerl::nanobench::doNotOptimizeAway(result);
     });
   }
@@ -125,8 +125,8 @@ int main() {
 
     // Optimized DBSCAN timing
     start_time = std::chrono::high_resolution_clock::now();
-    dbscan::DBSCANOptimized<double> optimized_dbscan(0.8, 5, large_dataset);
-    auto optimized_result = optimized_dbscan.cluster();
+    dbscan::DBSCANOptimized<double> optimized_dbscan(0.8, 5);
+    auto optimized_result = optimized_dbscan.cluster(large_dataset);
     end_time = std::chrono::high_resolution_clock::now();
     auto optimized_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
 

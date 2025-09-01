@@ -13,9 +13,9 @@ namespace dbscan {
 
 template <typename T = double> class UnionFind {
 private:
-  std::vector<int32_t> parent;
+  mutable std::vector<int32_t> parent;
   std::vector<int32_t> rank;
-  std::mutex mutex;
+  mutable std::mutex mutex;
 
 public:
   UnionFind(size_t size) : parent(size), rank(size, 0) {
@@ -24,9 +24,9 @@ public:
     }
   }
 
-  int32_t find(int32_t x) {
+  int32_t find(int32_t x) const {
     if (parent[x] != x) {
-      parent[x] = find(parent[x]);
+      return find(parent[x]); // No path compression in const method
     }
     return parent[x];
   }
@@ -144,18 +144,40 @@ private:
   size_t grid_width;
 
 public:
+  /**
+   * @brief Constructs an optimized DBSCAN clustering algorithm instance with spatial indexing.
+   * @param eps Maximum distance between two points for them to be considered neighbors.
+   * @param min_pts Minimum number of points required to form a dense region (core point).
+   * @param points Vector of 2D points to cluster (used for spatial grid construction).
+   */
   DBSCANOptimized(T eps, int32_t min_pts, const std::vector<Point<T>> &points)
       : eps_(eps), min_pts_(min_pts), grid_(eps, points), points_(points) {}
 
+  /**
+   * @brief Performs optimized DBSCAN clustering using spatial indexing and union-find.
+   * @return ClusterResult containing cluster labels and number of clusters found.
+   */
   ClusterResult<T> cluster();
 
 private:
   std::vector<bool> find_core_points() const;
   std::vector<size_t> get_neighbors(size_t point_idx) const;
-  T distance_squared(const Point<T> &a, const Point<T> &b) const;
+
+  /**
+   * @brief Computes squared Euclidean distance between two points (inlined for performance).
+   * @param a First point.
+   * @param b Second point.
+   * @return Squared distance between points.
+   */
+  inline T distance_squared(const Point<T> &a, const Point<T> &b) const {
+    T dx = a.x - b.x;
+    T dy = a.y - b.y;
+    return dx * dx + dy * dy;
+  }
+
   void process_core_core_connections(const std::vector<bool> &is_core, UnionFind<T> &uf) const;
-  std::vector<int32_t> assign_border_points(const std::vector<bool> &is_core, const UnionFind<T> &uf) const;
-  int32_t count_clusters(const UnionFind<T> &uf) const;
+  std::vector<int32_t> assign_border_points(const std::vector<bool> &is_core, UnionFind<T> &uf) const;
+  int32_t count_clusters(UnionFind<T> &uf) const;
 };
 
 } // namespace dbscan

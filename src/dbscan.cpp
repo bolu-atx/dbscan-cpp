@@ -15,6 +15,9 @@ template <typename T> ClusterResult<T> DBSCAN<T>::cluster(const std::vector<Poin
   std::vector<int32_t> labels(points.size(), -1); // -1 means unvisited
   int32_t cluster_id = 0;
 
+  // TODO: Consider parallel processing of independent clusters using OpenMP or std::execution::par
+  // TODO: Pre-allocate cluster_id counter more efficiently for large datasets
+
   for (int32_t i = 0; i < static_cast<int32_t>(points.size()); ++i) {
     if (labels[i] != -1)
       continue; // Already processed
@@ -29,6 +32,7 @@ template <typename T> ClusterResult<T> DBSCAN<T>::cluster(const std::vector<Poin
     }
   }
 
+  // TODO: Optimize noise marker conversion - could be done in-place during clustering
   // Convert noise markers back to -1
   for (auto &label : labels) {
     if (label == -2)
@@ -44,6 +48,10 @@ std::vector<int32_t> DBSCAN<T>::find_neighbors(const std::vector<Point<T>> &poin
   const Point<T> &target = points[point_idx];
   T eps_squared = eps_ * eps_;
 
+  // TODO: Optimize O(n²) neighbor finding - consider spatial indexing (grid/k-d tree)
+  // TODO: Reserve vector capacity to avoid reallocations: neighbors.reserve(points.size() / 4);
+  // TODO: Consider parallel processing for large datasets using std::execution::par
+
   for (size_t i = 0; i < points.size(); ++i) {
     if (i == static_cast<size_t>(point_idx))
       continue;
@@ -58,12 +66,6 @@ std::vector<int32_t> DBSCAN<T>::find_neighbors(const std::vector<Point<T>> &poin
   }
 
   return neighbors;
-}
-
-template <typename T> T DBSCAN<T>::distance_squared(const Point<T> &a, const Point<T> &b) const {
-  T dx = a.x - b.x;
-  T dy = a.y - b.y;
-  return dx * dx + dy * dy;
 }
 
 template <typename T>

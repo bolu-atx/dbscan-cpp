@@ -1,6 +1,5 @@
 #include "dbscan_optimized.h"
 #include <algorithm>
-#include <execution>
 
 namespace dbscan {
 
@@ -28,8 +27,9 @@ template <typename T> ClusterResult<T> DBSCANOptimized<T>::cluster() {
 template <typename T> std::vector<bool> DBSCANOptimized<T>::find_core_points() const {
   std::vector<bool> is_core(points_.size(), false);
 
-  // Parallel core point detection
-  std::for_each(std::execution::par, points_.begin(), points_.end(), [&](const Point<T> &point) {
+  // TODO: Replace sequential processing with parallel execution using std::execution::par
+  // TODO: Consider SIMD vectorization for neighbor counting
+  std::for_each(points_.begin(), points_.end(), [&](const Point<T> &point) {
     size_t idx = &point - &points_[0];
     auto neighbors = get_neighbors(idx);
     if (static_cast<int32_t>(neighbors.size()) >= min_pts_) {
@@ -51,11 +51,14 @@ template <typename T> std::vector<size_t> DBSCANOptimized<T>::get_neighbors(size
   size_t cell_y = cell_coords.second;
 
   // Check neighboring cells
-  std::vector<size_t> neighbor_cells = grid_.get_neighbor_cells(cell_x, cell_y);
+  auto neighbor_cells = grid_.get_neighbor_cells(cell_x, cell_y);
 
-  for (size_t cell_idx : neighbor_cells) {
-    size_t cx = cell_idx % 100; // Assuming reasonable grid width
-    size_t cy = cell_idx / 100;
+  // TODO: Reserve vector capacity based on estimated neighbor count to avoid reallocations
+  // TODO: Consider early termination when min_pts neighbors are found (for core point detection)
+
+  for (auto &cell_coords : neighbor_cells) {
+    size_t cx = cell_coords.first;
+    size_t cy = cell_coords.second;
 
     std::vector<size_t> cell_points = grid_.get_points_in_cell(cx, cy);
 
@@ -73,16 +76,12 @@ template <typename T> std::vector<size_t> DBSCANOptimized<T>::get_neighbors(size
   return neighbors;
 }
 
-template <typename T> T DBSCANOptimized<T>::distance_squared(const Point<T> &a, const Point<T> &b) const {
-  T dx = a.x - b.x;
-  T dy = a.y - b.y;
-  return dx * dx + dy * dy;
-}
-
 template <typename T>
 void DBSCANOptimized<T>::process_core_core_connections(const std::vector<bool> &is_core, UnionFind<T> &uf) const {
-  // Parallel processing of core-core connections
-  std::for_each(std::execution::par, points_.begin(), points_.end(), [&](const Point<T> &point) {
+  // TODO: Replace sequential processing with parallel union-find operations
+  // TODO: Consider path compression optimization in UnionFind::find()
+  // TODO: Batch union operations to reduce locking overhead in concurrent scenarios
+  std::for_each(points_.begin(), points_.end(), [&](const Point<T> &point) {
     size_t idx = &point - &points_[0];
     if (!is_core[idx])
       return;
@@ -98,11 +97,11 @@ void DBSCANOptimized<T>::process_core_core_connections(const std::vector<bool> &
 
 template <typename T>
 std::vector<int32_t> DBSCANOptimized<T>::assign_border_points(const std::vector<bool> &is_core,
-                                                              const UnionFind<T> &uf) const {
+                                                              UnionFind<T> &uf) const {
   std::vector<int32_t> labels(points_.size(), -1);
 
-  // Parallel border point assignment
-  std::for_each(std::execution::par, points_.begin(), points_.end(), [&](const Point<T> &point) {
+  // Sequential border point assignment
+  std::for_each(points_.begin(), points_.end(), [&](const Point<T> &point) {
     size_t idx = &point - &points_[0];
 
     if (is_core[idx]) {
@@ -123,9 +122,11 @@ std::vector<int32_t> DBSCANOptimized<T>::assign_border_points(const std::vector<
   return labels;
 }
 
-template <typename T> int32_t DBSCANOptimized<T>::count_clusters(const UnionFind<T> &uf) const {
+template <typename T> int32_t DBSCANOptimized<T>::count_clusters(UnionFind<T> &uf) const {
   std::unordered_set<int32_t> unique_clusters;
 
+  // TODO: Optimize cluster counting - could use a vector<bool> or bitset for dense cluster IDs
+  // TODO: Consider parallel counting with atomic operations for very large datasets
   for (size_t i = 0; i < points_.size(); ++i) {
     int32_t cluster_id = uf.find(static_cast<int32_t>(i));
     if (cluster_id >= 0) { // Only count non-noise points

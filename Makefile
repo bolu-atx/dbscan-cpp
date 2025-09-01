@@ -51,7 +51,7 @@ $(BUILD_DIR)/build.ninja:
 # Test target
 test: build
 	@echo "Running unit tests..."
-	@cd $(BUILD_DIR) && ./dbscan_tests
+	@cd $(BUILD_DIR) && ./dbscan_tests --reporter compact --success
 	@echo "All tests passed!"
 
 # Benchmark target (temporarily disabled due to compilation issues)

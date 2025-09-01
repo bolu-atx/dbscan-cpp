@@ -6,12 +6,19 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Use native architecture on macOS (allows universal builds if supported)
+if(APPLE)
+    # Let CMake detect the native architecture
+    # This allows building for both x86_64 and arm64 when possible
+    message(STATUS "macOS detected - using native architecture: ${CMAKE_OSX_ARCHITECTURES}")
+endif()
+
 # SIMD optimization will be handled in the code with compiler intrinsics
 
 # Library target
 add_library(dbscan STATIC
     src/dbscan.cpp
-    # src/dbscan_optimized.cpp  # Temporarily disabled due to compilation issues
+    src/dbscan_optimized.cpp
 )
 
 target_include_directories(dbscan

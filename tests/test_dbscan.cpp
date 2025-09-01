@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <dbscan.h>
+#include <dbscan_optimized.h>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -316,32 +317,33 @@ TEST_CASE("Compare DBSCAN vs DBSCANOptimized results", "[comparison]") {
   };
 
   // Test with original DBSCAN
-  dbscan::DBSCAN<double> original_dbscan(0.5, 3);
+  dbscan::DBSCAN<double> original_dbscan(0.5, 2);
   auto original_result = original_dbscan.cluster(points);
 
-  // Test with optimized DBSCAN (temporarily disabled)
-  // dbscan::DBSCANOptimized<double> optimized_dbscan(0.5, 3, points);
-  // auto optimized_result = optimized_dbscan.cluster();
+  // Test with optimized DBSCAN
+  dbscan::DBSCANOptimized<double> optimized_dbscan(0.5, 2, points);
+  auto optimized_result = optimized_dbscan.cluster();
 
   // Both should produce valid results
   REQUIRE(original_result.labels.size() == points.size());
-  // REQUIRE(optimized_result.labels.size() == points.size());
+  REQUIRE(optimized_result.labels.size() == points.size());
 
   // Both should find some clusters (exact count may differ due to implementation details)
   REQUIRE(original_result.num_clusters >= 2);
-  // REQUIRE(optimized_result.num_clusters >= 2);
+  REQUIRE(optimized_result.num_clusters >= 2);
 
   // Both should identify noise points consistently
   int original_noise_count = 0;
-  // int optimized_noise_count = 0;
+  int optimized_noise_count = 0;
   for (size_t i = 0; i < points.size(); ++i) {
     if (original_result.labels[i] == -1)
       original_noise_count++;
-    // if (optimized_result.labels[i] == -1) optimized_noise_count++;
+    if (optimized_result.labels[i] == -1)
+      optimized_noise_count++;
   }
 
   // Allow some tolerance in noise point detection
-  // REQUIRE(std::abs(original_noise_count - optimized_noise_count) <= 2);
+  REQUIRE(std::abs(original_noise_count - optimized_noise_count) <= 2);
 }
 
 TEST_CASE("DBSCAN handles empty input", "[dbscan]") {

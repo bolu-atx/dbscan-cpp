@@ -11,6 +11,13 @@
 
 namespace dbscan {
 
+/**
+ * @brief Union-Find data structure with path compression and union by rank for efficient
+ *        connected component tracking in DBSCAN clustering.
+ *
+ * This class provides thread-safe operations for merging clusters and finding cluster representatives,
+ * optimized for the parallel processing requirements of DBSCAN.
+ */
 template <typename T = double> class UnionFind {
 private:
   mutable std::vector<int32_t> parent;
@@ -55,6 +62,13 @@ template <typename T = double> struct GridCell {
   std::vector<size_t> points;
 };
 
+/**
+ * @brief Spatial grid data structure for efficient neighbor queries in DBSCAN clustering.
+ *
+ * This class divides the 2D space into a grid of cells based on the epsilon parameter,
+ * enabling fast retrieval of nearby points without checking all point pairs.
+ * Each cell contains indices of points that fall within its boundaries.
+ */
 template <typename T = double> class SpatialGrid {
 private:
   T cell_size;
@@ -135,6 +149,13 @@ public:
   }
 };
 
+/**
+ * @brief Optimized DBSCAN clustering algorithm using spatial indexing and union-find.
+ *
+ * This class implements an efficient version of the DBSCAN density-based clustering algorithm
+ * that uses a spatial grid for fast neighbor queries and union-find for cluster merging.
+ * It achieves better performance than naive DBSCAN by avoiding O(n²) distance computations.
+ */
 template <typename T = double> class DBSCANOptimized {
 private:
   T eps_;

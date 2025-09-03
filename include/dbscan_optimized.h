@@ -4,43 +4,70 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
-#include <tbb/blocked_range.h>
-#include <tbb/parallel_for.h>
 #include <unordered_set>
 #include <vector>
 
 namespace dbscan {
 
-// A thread-safe Union-Find data structure using int32_t
-class ConcurrentUnionFind {
+class AtomicUnionFind {
 public:
-  ConcurrentUnionFind(int32_t n) : parent(n) {
+  explicit AtomicUnionFind(int32_t n) : parent(n) {
+    // Initialize each element to be its own parent.
     for (int32_t i = 0; i < n; ++i) {
-      parent[i].store(i);
+      parent[i].store(i, std::memory_order_relaxed);
     }
   }
 
+  /**
+   * Finds the representative (root) of the set containing element i.
+   * Applies path compression along the way.
+   */
   int32_t find(int32_t i) {
+    // 1. Find the root of the set.
     int32_t root = i;
-    while (root != parent[root].load()) {
-      root = parent[root].load();
+    while (true) {
+      int32_t parent_val = parent[root].load(std::memory_order_relaxed);
+      if (parent_val == root) {
+        break;
+      }
+      root = parent_val;
     }
+
+    // 2. Perform path compression.
     int32_t curr = i;
     while (curr != root) {
-      int32_t next = parent[curr].load();
-      parent[curr].store(root);
-      curr = next;
+      int32_t parent_val = parent[curr].load(std::memory_order_relaxed);
+      // Atomically update the parent to point to the root.
+      // If this fails, another thread has already updated it, which is fine.
+      // We don't overwrite a potentially "better" parent with our `root`.
+      parent[curr].compare_exchange_weak(parent_val, root, std::memory_order_release, std::memory_order_relaxed);
+      curr = parent_val;
     }
     return root;
   }
 
+  /**
+   * Unites the sets containing elements i and j.
+   */
   void unite(int32_t i, int32_t j) {
-    int32_t root_i = find(i);
-    int32_t root_j = find(j);
-    if (root_i != root_j) {
+    while (true) {
+      int32_t root_i = find(i);
+      int32_t root_j = find(j);
+
+      if (root_i == root_j) {
+        return; // Already in the same set.
+      }
+
+      // Always link the smaller root to the larger root for determinism
+      // and to help prevent long chains.
       int32_t old_root = std::min(root_i, root_j);
       int32_t new_root = std::max(root_i, root_j);
-      parent[old_root].store(new_root);
+
+      int32_t expected = old_root;
+      if (parent[old_root].compare_exchange_strong(expected, new_root, std::memory_order_acq_rel)) {
+        return; // Success.
+      }
+      // If CAS failed, another thread interfered. Retry the whole operation.
     }
   }
 
@@ -57,6 +84,7 @@ public:
 private:
   T eps_;
   int32_t min_pts_;
+  int32_t nthreads_{0};
 
   inline T distance_squared(const Point<T> &a, const Point<T> &b) const {
     T dx = a.x - b.x;

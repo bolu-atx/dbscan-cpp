@@ -28,7 +28,6 @@ target_include_directories(dbscan
     PRIVATE
         src
         include
-        ${tbb_SOURCE_DIR}/include
 )
 
 target_compile_options(dbscan PRIVATE
@@ -40,7 +39,6 @@ target_compile_options(dbscan PRIVATE
 
 target_link_libraries(dbscan
     PRIVATE
-        TBB::tbb
 )
 
 # Dependencies
@@ -62,13 +60,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(nanobench)
 
-# TBB for parallel processing
-FetchContent_Declare(
-    tbb
-    GIT_REPOSITORY https://github.com/oneapi-src/oneTBB.git
-    GIT_TAG v2021.9.0
-)
-FetchContent_MakeAvailable(tbb)
 
 add_executable(dbscan_tests
     tests/test_dbscan.cpp
@@ -83,7 +74,6 @@ target_link_libraries(dbscan_tests
 target_include_directories(dbscan_tests
     PRIVATE
         include
-        ${tbb_SOURCE_DIR}/include
 )
 
 # Benchmark executable
@@ -104,7 +94,6 @@ target_link_libraries(dbscan_benchmark
 target_include_directories(dbscan_benchmark
     PRIVATE
         include
-        ${tbb_SOURCE_DIR}/include
 )
 
 # Enable testing

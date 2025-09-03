@@ -1,6 +1,5 @@
 #include "dbscan_optimized.h"
-#include <tbb/blocked_range.h>
-#include <tbb/parallel_for.h>
+#include "parallel.hpp"
 
 namespace dbscan {
 
@@ -11,7 +10,6 @@ template <typename T> ClusterResult<T> DBSCANOptimized<T>::cluster(const std::ve
   }
   const T epsilon_sq = eps_ * eps_;
 
-  // Internal structure for processing
   struct WorkingPoint {
     T x, y;
     int32_t cluster_id = -1;
@@ -51,102 +49,106 @@ template <typename T> ClusterResult<T> DBSCANOptimized<T>::cluster(const std::ve
   }
 
   // Step 2: Core Point Detection (parallel)
-  tbb::parallel_for(tbb::blocked_range<int32_t>(0, n_points), [&](const tbb::blocked_range<int32_t> &r) {
-    for (int32_t i = r.begin(); i < r.end(); ++i) {
-      int32_t neighbor_count = 0;
-      int32_t cx = working_points[i].cell_id % cells_x;
-      int32_t cy = working_points[i].cell_id / cells_x;
+  utils::parallel_for(0, n_points, 0, std::function<void(size_t, size_t)>([&](size_t start, size_t end) {
+                        for (size_t i = start; i < end; ++i) {
+                          int32_t neighbor_count = 0;
+                          int32_t cx = working_points[i].cell_id % cells_x;
+                          int32_t cy = working_points[i].cell_id / cells_x;
 
-      for (int32_t dx = -1; dx <= 1; ++dx) {
-        for (int32_t dy = -1; dy <= 1; ++dy) {
-          int32_t neighbor_cx = cx + dx;
-          int32_t neighbor_cy = cy + dy;
+                          for (int32_t dx = -1; dx <= 1; ++dx) {
+                            for (int32_t dy = -1; dy <= 1; ++dy) {
+                              int32_t neighbor_cx = cx + dx;
+                              int32_t neighbor_cy = cy + dy;
 
-          if (neighbor_cx >= 0 && neighbor_cx < cells_x && neighbor_cy >= 0 && neighbor_cy < cells_y) {
-            int32_t neighbor_cell_id = neighbor_cx + neighbor_cy * cells_x;
-            for (int32_t neighbor_idx : grid[neighbor_cell_id]) {
-              if (neighbor_idx == i)
-                continue;
-              T dist_sq = distance_squared(points[i], points[neighbor_idx]);
-              if (dist_sq <= epsilon_sq) {
-                neighbor_count++;
-              }
-            }
-          }
-        }
-      }
-      if (neighbor_count >= min_pts_) {
-        working_points[i].is_core = true;
-      }
-    }
-  });
+                              if (neighbor_cx >= 0 && neighbor_cx < cells_x && neighbor_cy >= 0 &&
+                                  neighbor_cy < cells_y) {
+                                int32_t neighbor_cell_id = neighbor_cx + neighbor_cy * cells_x;
+                                for (int32_t neighbor_idx : grid[neighbor_cell_id]) {
+                                  if (neighbor_idx == static_cast<int32_t>(i))
+                                    continue;
+                                  T dist_sq = distance_squared(points[i], points[neighbor_idx]);
+                                  if (dist_sq <= epsilon_sq) {
+                                    neighbor_count++;
+                                  }
+                                }
+                              }
+                            }
+                          }
+                          if (neighbor_count >= min_pts_) {
+                            working_points[i].is_core = true;
+                          }
+                        }
+                      }));
 
   // Step 3: Connected Components (parallel)
-  ConcurrentUnionFind uf(n_points);
-  tbb::parallel_for(tbb::blocked_range<int32_t>(0, n_points), [&](const tbb::blocked_range<int32_t> &r) {
-    for (int32_t i = r.begin(); i < r.end(); ++i) {
-      if (!working_points[i].is_core)
-        continue;
-      int32_t cx = working_points[i].cell_id % cells_x;
-      int32_t cy = working_points[i].cell_id / cells_x;
+  AtomicUnionFind uf(n_points);
+  utils::parallel_for(0, n_points, nthreads_, std::function<void(size_t, size_t)>([&](size_t start, size_t end) {
+                        for (size_t i = start; i < end; ++i) {
+                          if (!working_points[i].is_core)
+                            continue;
+                          int32_t cx = working_points[i].cell_id % cells_x;
+                          int32_t cy = working_points[i].cell_id / cells_x;
 
-      for (int32_t dx = -1; dx <= 1; ++dx) {
-        for (int32_t dy = -1; dy <= 1; ++dy) {
-          int32_t neighbor_cx = cx + dx;
-          int32_t neighbor_cy = cy + dy;
-          if (neighbor_cx >= 0 && neighbor_cx < cells_x && neighbor_cy >= 0 && neighbor_cy < cells_y) {
-            int32_t neighbor_cell_id = neighbor_cx + neighbor_cy * cells_x;
-            for (int32_t neighbor_idx : grid[neighbor_cell_id]) {
-              if (i == neighbor_idx || !working_points[neighbor_idx].is_core)
-                continue;
-              T dist_sq = distance_squared(points[i], points[neighbor_idx]);
-              if (dist_sq <= epsilon_sq) {
-                uf.unite(i, neighbor_idx);
-              }
-            }
-          }
-        }
-      }
-    }
-  });
+                          for (int32_t dx = -1; dx <= 1; ++dx) {
+                            for (int32_t dy = -1; dy <= 1; ++dy) {
+                              int32_t neighbor_cx = cx + dx;
+                              int32_t neighbor_cy = cy + dy;
+                              if (neighbor_cx >= 0 && neighbor_cx < cells_x && neighbor_cy >= 0 &&
+                                  neighbor_cy < cells_y) {
+                                int32_t neighbor_cell_id = neighbor_cx + neighbor_cy * cells_x;
+                                for (int32_t neighbor_idx : grid[neighbor_cell_id]) {
+                                  if (static_cast<int32_t>(i) == neighbor_idx || !working_points[neighbor_idx].is_core)
+                                    continue;
+                                  T dist_sq = distance_squared(points[i], points[neighbor_idx]);
+                                  if (dist_sq <= epsilon_sq) {
+                                    uf.unite(i, neighbor_idx);
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }));
 
   // Step 4: Label Clusters (parallel)
-  tbb::parallel_for(tbb::blocked_range<int32_t>(0, n_points), [&](const tbb::blocked_range<int32_t> &r) {
-    for (int32_t i = r.begin(); i < r.end(); ++i) {
-      if (working_points[i].is_core) {
-        working_points[i].cluster_id = uf.find(i);
-      }
-    }
-  });
+  utils::parallel_for(0, n_points, this->nthreads_, std::function<void(size_t, size_t)>([&](size_t start, size_t end) {
+                        for (size_t i = start; i < end; ++i) {
+                          if (working_points[i].is_core) {
+                            working_points[i].cluster_id = uf.find(i);
+                          }
+                        }
+                      }));
 
   // Step 5: Assign Border Points (parallel)
-  tbb::parallel_for(tbb::blocked_range<int32_t>(0, n_points), [&](const tbb::blocked_range<int32_t> &r) {
-    for (int32_t i = r.begin(); i < r.end(); ++i) {
-      if (working_points[i].is_core)
-        continue;
-      int32_t cx = working_points[i].cell_id % cells_x;
-      int32_t cy = working_points[i].cell_id / cells_x;
-      for (int32_t dx = -1; dx <= 1; ++dx) {
-        for (int32_t dy = -1; dy <= 1; ++dy) {
-          int32_t neighbor_cx = cx + dx;
-          int32_t neighbor_cy = cy + dy;
-          if (neighbor_cx >= 0 && neighbor_cx < cells_x && neighbor_cy >= 0 && neighbor_cy < cells_y) {
-            int32_t neighbor_cell_id = neighbor_cx + neighbor_cy * cells_x;
-            for (int32_t neighbor_idx : grid[neighbor_cell_id]) {
-              if (working_points[neighbor_idx].is_core) {
-                T dist_sq = distance_squared(points[i], points[neighbor_idx]);
-                if (dist_sq <= epsilon_sq) {
-                  working_points[i].cluster_id = working_points[neighbor_idx].cluster_id;
-                  goto next_point;
-                }
-              }
-            }
-          }
-        }
-      }
-    next_point:;
-    }
-  });
+  utils::parallel_for(0, n_points, this->nthreads_, std::function<void(size_t, size_t)>([&](size_t start, size_t end) {
+                        for (size_t i = start; i < end; ++i) {
+                          if (working_points[i].is_core)
+                            continue;
+                          int32_t cx = working_points[i].cell_id % cells_x;
+                          int32_t cy = working_points[i].cell_id / cells_x;
+                          bool assigned = false;
+                          for (int32_t dx = -1; dx <= 1 && !assigned; ++dx) {
+                            for (int32_t dy = -1; dy <= 1 && !assigned; ++dy) {
+                              int32_t neighbor_cx = cx + dx;
+                              int32_t neighbor_cy = cy + dy;
+                              if (neighbor_cx >= 0 && neighbor_cx < cells_x && neighbor_cy >= 0 &&
+                                  neighbor_cy < cells_y) {
+                                int32_t neighbor_cell_id = neighbor_cx + neighbor_cy * cells_x;
+                                for (int32_t neighbor_idx : grid[neighbor_cell_id]) {
+                                  if (working_points[neighbor_idx].is_core) {
+                                    T dist_sq = distance_squared(points[i], points[neighbor_idx]);
+                                    if (dist_sq <= epsilon_sq) {
+                                      working_points[i].cluster_id = working_points[neighbor_idx].cluster_id;
+                                      assigned = true;
+                                      break;
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }));
 
   // Step 6: Finalize and Return Result
   std::vector<int32_t> labels(n_points);

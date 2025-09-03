@@ -63,6 +63,9 @@ FetchContent_MakeAvailable(nanobench)
 
 add_executable(dbscan_tests
     tests/test_dbscan.cpp
+    tests/test_dbscan_optimized.cpp
+    tests/test_parallel_for.cpp
+    tests/test_union_find.cpp
 )
 
 target_link_libraries(dbscan_tests

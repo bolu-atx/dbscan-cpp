@@ -1,6 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstdlib>
-#include <ctime>
 #include <dbscan.h>
 #include <dbscan_optimized.h>
 #include <fstream>
@@ -64,7 +63,7 @@ std::vector<int32_t> load_labels_from_file(const std::string &filename) {
 
 } // namespace
 
-TEST_CASE("DBSCAN basic functionality test", "[dbscan]") {
+TEST_CASE("DBSCANOptimized basic functionality test", "[dbscan_optimized]") {
   // Create simple test data
   std::vector<dbscan::Point<double>> points = {
       {0.0, 0.0},  {0.1, 0.1}, {0.2, 0.2}, // Cluster 1
@@ -72,7 +71,7 @@ TEST_CASE("DBSCAN basic functionality test", "[dbscan]") {
       {10.0, 10.0}                         // Noise point
   };
 
-  dbscan::DBSCAN<double> dbscan(0.5, 2); // eps=0.5, min_pts=2
+  dbscan::DBSCANOptimized<double> dbscan(0.5, 2); // eps=0.5, min_pts=2
   auto result = dbscan.cluster(points);
 
   REQUIRE(result.labels.size() == points.size());
@@ -86,31 +85,31 @@ TEST_CASE("DBSCAN basic functionality test", "[dbscan]") {
   REQUIRE(result.labels[6] == -1);               // Last point should be noise
 }
 
-TEST_CASE("DBSCAN with 500 points", "[dbscan][performance]") {
+TEST_CASE("DBSCANOptimized with 500 points", "[dbscan_optimized][performance]") {
   // Generate test data with 500 points
   std::vector<dbscan::Point<double>> points;
   points.reserve(500);
 
   // Create two clusters
   for (int i = 0; i < 200; ++i) {
-    points.push_back({static_cast<double>(i % 20) * 0.1, static_cast<double>(i / 20) * 0.1});
+    points.push_back({static_cast<double>(i % 20) * 0.1, static_cast<double>(i) / 20 * 0.1});
   }
   for (int i = 0; i < 200; ++i) {
-    points.push_back({5.0 + static_cast<double>(i % 20) * 0.1, static_cast<double>(i / 20) * 0.1});
+    points.push_back({5.0 + static_cast<double>(i % 20) * 0.1, static_cast<double>(i) / 20 * 0.1});
   }
   // Add some noise
   for (int i = 0; i < 100; ++i) {
-    points.push_back({10.0 + static_cast<double>(i % 10) * 0.1, 10.0 + static_cast<double>(i / 10) * 0.1});
+    points.push_back({10.0 + static_cast<double>(i % 10) * 0.1, 10.0 + static_cast<double>(i) / 10 * 0.1});
   }
 
-  dbscan::DBSCAN<double> dbscan(0.3, 3);
+  dbscan::DBSCANOptimized<double> dbscan(0.3, 3);
   auto result = dbscan.cluster(points);
 
   REQUIRE(result.labels.size() == 500);
   REQUIRE(result.num_clusters >= 2); // Should find at least 2 clusters
 }
 
-TEST_CASE("DBSCAN with 10k points", "[dbscan][performance]") {
+TEST_CASE("DBSCANOptimized with 10k points", "[dbscan_optimized][performance]") {
   // Generate test data with 10,000 points
   std::vector<dbscan::Point<double>> points;
   points.reserve(10000);
@@ -132,14 +131,14 @@ TEST_CASE("DBSCAN with 10k points", "[dbscan][performance]") {
     points.push_back({x, y});
   }
 
-  dbscan::DBSCAN<double> dbscan(0.5, 5);
+  dbscan::DBSCANOptimized<double> dbscan(0.5, 5);
   auto result = dbscan.cluster(points);
 
   REQUIRE(result.labels.size() == 10000);
   REQUIRE(result.num_clusters >= 3); // Should find multiple clusters
 }
 
-TEST_CASE("DBSCAN with 100k points", "[dbscan][performance]") {
+TEST_CASE("DBSCANOptimized with 100k points", "[dbscan_optimized][performance]") {
   // Generate test data with 100,000 points (scaled down from 1M for
   // practicality)
   std::vector<dbscan::Point<double>> points;
@@ -162,14 +161,14 @@ TEST_CASE("DBSCAN with 100k points", "[dbscan][performance]") {
     points.push_back({x, y});
   }
 
-  dbscan::DBSCAN<double> dbscan(0.8, 5);
+  dbscan::DBSCANOptimized<double> dbscan(0.8, 5);
   auto result = dbscan.cluster(points);
 
   REQUIRE(result.labels.size() >= 100000); // Allow for slight variations in data generation
   REQUIRE(result.num_clusters >= 5);       // Should find multiple clusters
 }
 
-TEST_CASE("DBSCAN different eps values", "[dbscan][parameters]") {
+TEST_CASE("DBSCANOptimized different eps values", "[dbscan_optimized][parameters]") {
   std::vector<dbscan::Point<double>> points = {
       {0.0, 0.0}, {0.1, 0.1}, {0.2, 0.2}, // Close cluster
       {2.0, 2.0}, {2.1, 2.1}, {2.2, 2.2}, // Medium distance cluster
@@ -177,35 +176,35 @@ TEST_CASE("DBSCAN different eps values", "[dbscan][parameters]") {
   };
 
   // Test with small eps (should create 3 clusters)
-  dbscan::DBSCAN<double> dbscan_small_eps(0.3, 2);
+  dbscan::DBSCANOptimized<double> dbscan_small_eps(0.3, 2);
   auto result_small = dbscan_small_eps.cluster(points);
   REQUIRE(result_small.num_clusters >= 3);
 
   // Test with large eps (should create fewer clusters)
-  dbscan::DBSCAN<double> dbscan_large_eps(3.0, 2);
+  dbscan::DBSCANOptimized<double> dbscan_large_eps(3.0, 2);
   auto result_large = dbscan_large_eps.cluster(points);
   REQUIRE(result_large.num_clusters <= result_small.num_clusters);
 }
 
-TEST_CASE("DBSCAN different min_pts values", "[dbscan][parameters]") {
+TEST_CASE("DBSCANOptimized different min_pts values", "[dbscan_optimized][parameters]") {
   std::vector<dbscan::Point<double>> points = {
       {0.0, 0.0}, {0.1, 0.1}, {0.2, 0.2}, {0.3, 0.3}, // 4 points
       {2.0, 2.0}, {2.1, 2.1}, {2.2, 2.2}              // 3 points
   };
 
   // Test with min_pts = 3 (should find 2 clusters)
-  dbscan::DBSCAN<double> dbscan_min3(0.5, 3);
+  dbscan::DBSCANOptimized<double> dbscan_min3(0.5, 3);
   auto result_min3 = dbscan_min3.cluster(points);
   REQUIRE(result_min3.num_clusters >= 1);
 
   // Test with min_pts = 5 (should find fewer clusters)
-  dbscan::DBSCAN<double> dbscan_min5(0.5, 5);
+  dbscan::DBSCANOptimized<double> dbscan_min5(0.5, 5);
   auto result_min5 = dbscan_min5.cluster(points);
   REQUIRE(result_min5.num_clusters <= result_min3.num_clusters);
 }
 
-TEST_CASE("DBSCAN handles empty input", "[dbscan]") {
-  dbscan::DBSCAN<double> dbscan(0.5, 3);
+TEST_CASE("DBSCANOptimized handles empty input", "[dbscan_optimized]") {
+  dbscan::DBSCANOptimized<double> dbscan(0.5, 3);
   std::vector<dbscan::Point<double>> empty_points;
 
   auto result = dbscan.cluster(empty_points);
@@ -214,8 +213,8 @@ TEST_CASE("DBSCAN handles empty input", "[dbscan]") {
   REQUIRE(result.num_clusters == 0);
 }
 
-TEST_CASE("DBSCAN handles single point", "[dbscan]") {
-  dbscan::DBSCAN<double> dbscan(0.5, 3);
+TEST_CASE("DBSCANOptimized handles single point", "[dbscan_optimized]") {
+  dbscan::DBSCANOptimized<double> dbscan(0.5, 3);
   std::vector<dbscan::Point<double>> single_point = {{1.0, 2.0}};
 
   auto result = dbscan.cluster(single_point);
@@ -225,8 +224,8 @@ TEST_CASE("DBSCAN handles single point", "[dbscan]") {
   REQUIRE(result.num_clusters == 0);
 }
 
-TEST_CASE("DBSCAN handles all noise", "[dbscan]") {
-  dbscan::DBSCAN<double> dbscan(0.1, 5); // Very small eps, high min_pts
+TEST_CASE("DBSCANOptimized handles all noise", "[dbscan_optimized]") {
+  dbscan::DBSCANOptimized<double> dbscan(0.1, 5); // Very small eps, high min_pts
   std::vector<dbscan::Point<double>> scattered_points = {{0.0, 0.0}, {1.0, 0.0}, {2.0, 0.0}, {3.0, 0.0}};
 
   auto result = dbscan.cluster(scattered_points);

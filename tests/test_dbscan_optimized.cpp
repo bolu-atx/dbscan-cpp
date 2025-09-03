@@ -7,62 +7,6 @@
 #include <string>
 #include <vector>
 
-namespace {
-
-std::vector<dbscan::Point<double>> load_points_from_file(const std::string &filename) {
-  std::vector<dbscan::Point<double>> points;
-
-  std::ifstream file(filename, std::ios::binary);
-  if (!file) {
-    throw std::runtime_error("Could not open file: " + filename);
-  }
-
-  // Read number of points
-  uint32_t n_points;
-  file.read(reinterpret_cast<char *>(&n_points), sizeof(n_points));
-
-  points.reserve(n_points);
-
-  // Read points
-  for (uint32_t i = 0; i < n_points; ++i) {
-    double x, y;
-    file.read(reinterpret_cast<char *>(&x), sizeof(x));
-    file.read(reinterpret_cast<char *>(&y), sizeof(y));
-    points.push_back({x, y});
-  }
-
-  return points;
-}
-
-std::vector<int32_t> load_labels_from_file(const std::string &filename) {
-  std::vector<int32_t> labels;
-
-  std::ifstream file(filename, std::ios::binary);
-  if (!file) {
-    throw std::runtime_error("Could not open file: " + filename);
-  }
-
-  // Read number of points
-  uint32_t n_points;
-  file.read(reinterpret_cast<char *>(&n_points), sizeof(n_points));
-
-  // Skip points data
-  file.seekg(sizeof(double) * 2 * n_points, std::ios::cur);
-
-  labels.reserve(n_points);
-
-  // Read labels
-  for (uint32_t i = 0; i < n_points; ++i) {
-    int32_t label;
-    file.read(reinterpret_cast<char *>(&label), sizeof(label));
-    labels.push_back(label);
-  }
-
-  return labels;
-}
-
-} // namespace
-
 TEST_CASE("DBSCANOptimized basic functionality test", "[dbscan_optimized]") {
   // Create simple test data
   std::vector<dbscan::Point<double>> points = {

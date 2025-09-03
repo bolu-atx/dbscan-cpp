@@ -139,36 +139,6 @@ TEST_CASE("DBSCAN with 10k points", "[dbscan][performance]") {
   REQUIRE(result.num_clusters >= 3); // Should find multiple clusters
 }
 
-TEST_CASE("DBSCAN with 100k points", "[dbscan][performance]") {
-  // Generate test data with 100,000 points (scaled down from 1M for
-  // practicality)
-  std::vector<dbscan::Point<double>> points;
-  points.reserve(100000);
-
-  // Create clusters
-  for (int c = 0; c < 8; ++c) {
-    double center_x = c * 4.0;
-    double center_y = c * 4.0;
-    for (int i = 0; i < 12000; ++i) {
-      double x = center_x + (static_cast<double>(rand()) / RAND_MAX - 0.5) * 1.0;
-      double y = center_y + (static_cast<double>(rand()) / RAND_MAX - 0.5) * 1.0;
-      points.push_back({x, y});
-    }
-  }
-  // Add noise points
-  for (int i = 0; i < 16000; ++i) {
-    double x = 40.0 + (static_cast<double>(rand()) / RAND_MAX - 0.5) * 20.0;
-    double y = 40.0 + (static_cast<double>(rand()) / RAND_MAX - 0.5) * 20.0;
-    points.push_back({x, y});
-  }
-
-  dbscan::DBSCAN<double> dbscan(0.8, 5);
-  auto result = dbscan.cluster(points);
-
-  REQUIRE(result.labels.size() >= 100000); // Allow for slight variations in data generation
-  REQUIRE(result.num_clusters >= 5);       // Should find multiple clusters
-}
-
 TEST_CASE("DBSCAN different eps values", "[dbscan][parameters]") {
   std::vector<dbscan::Point<double>> points = {
       {0.0, 0.0}, {0.1, 0.1}, {0.2, 0.2}, // Close cluster

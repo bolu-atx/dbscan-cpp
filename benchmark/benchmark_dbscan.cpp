@@ -1,144 +1,103 @@
-#include "dbscan.h"
-#include "dbscan_optimized.h"
-#include <chrono>
-#include <cstdlib>
-#include <ctime>
+#include "dbscan_grid2d_l1.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <iostream>
-#include <memory>
+#include <limits>
 #include <nanobench.h>
+#include <random>
 #include <string>
 #include <vector>
 
-// Generate clustered 2D data for benchmarking
-std::vector<dbscan::Point<double>> generate_benchmark_data(size_t n_points, int n_clusters = 8) {
-  std::vector<dbscan::Point<double>> points;
-  points.reserve(n_points);
+namespace {
 
-  // Create clusters
-  for (int c = 0; c < n_clusters; ++c) {
-    double center_x = c * 5.0;
-    double center_y = c * 5.0;
-    size_t points_per_cluster = n_points / n_clusters;
+struct Uint32Dataset {
+  std::vector<uint32_t> x;
+  std::vector<uint32_t> y;
+};
 
-    for (size_t i = 0; i < points_per_cluster; ++i) {
-      double x = center_x + (static_cast<double>(rand()) / RAND_MAX - 0.5) * 2.0;
-      double y = center_y + (static_cast<double>(rand()) / RAND_MAX - 0.5) * 2.0;
-      points.push_back({x, y});
+Uint32Dataset generate_uint32_dataset(std::size_t cluster_count, std::size_t points_per_cluster,
+                                      std::size_t noise_points, uint32_t area_width, uint32_t cluster_sigma,
+                                      std::mt19937 &rng) {
+  std::uniform_real_distribution<double> uniform_dist(0.0, static_cast<double>(area_width));
+  std::normal_distribution<double> normal_dist(0.0, static_cast<double>(cluster_sigma));
+
+  Uint32Dataset dataset;
+  dataset.x.reserve(cluster_count * points_per_cluster + noise_points);
+  dataset.y.reserve(cluster_count * points_per_cluster + noise_points);
+
+  for (std::size_t c = 0; c < cluster_count; ++c) {
+    const double center_x = uniform_dist(rng);
+    const double center_y = uniform_dist(rng);
+
+    for (std::size_t i = 0; i < points_per_cluster; ++i) {
+      const double sample_x = center_x + normal_dist(rng);
+      const double sample_y = center_y + normal_dist(rng);
+
+      const uint32_t clamped_x =
+          static_cast<uint32_t>(std::min(static_cast<double>(area_width - 1), std::max(0.0, std::round(sample_x))));
+      const uint32_t clamped_y =
+          static_cast<uint32_t>(std::min(static_cast<double>(area_width - 1), std::max(0.0, std::round(sample_y))));
+
+      dataset.x.push_back(clamped_x);
+      dataset.y.push_back(clamped_y);
     }
   }
 
-  // Add some noise points
-  size_t noise_points = n_points / 10;
-  for (size_t i = 0; i < noise_points; ++i) {
-    double x = 50.0 + (static_cast<double>(rand()) / RAND_MAX - 0.5) * 20.0;
-    double y = 50.0 + (static_cast<double>(rand()) / RAND_MAX - 0.5) * 20.0;
-    points.push_back({x, y});
+  std::uniform_int_distribution<uint32_t> uniform_int(0, area_width - 1);
+  for (std::size_t i = 0; i < noise_points; ++i) {
+    dataset.x.push_back(uniform_int(rng));
+    dataset.y.push_back(uniform_int(rng));
   }
 
-  return points;
+  return dataset;
 }
 
+} // namespace
+
 int main() {
-  // Seed random number generator
-  srand(static_cast<unsigned int>(time(nullptr)));
+  constexpr uint32_t area_width = 1'000'000;
+  constexpr uint32_t cluster_sigma = 50; // Approximately 3 sigma ~ 150 px footprint
+  constexpr uint32_t eps = 60;
+  constexpr uint32_t min_samples = 16;
 
+  std::mt19937 rng(1337u);
   ankerl::nanobench::Bench bench;
+  bench.title("DBSCANGrid2D_L1");
+  bench.relative(true);
 
-  // Benchmark different data sizes
-  std::vector<size_t> data_sizes = {1000, 10000, 50000, 100000};
+  struct Scenario {
+    std::size_t clusters;
+    std::size_t points_per_cluster;
+  };
 
-  for (size_t n_points : data_sizes) {
-    std::cout << "\n=== Benchmarking with " << n_points << " points ===" << std::endl;
+  const std::vector<Scenario> scenarios = {
+      {32, 256},
+      {64, 256},
+      {100, 256},
+      {128, 256},
+  };
 
-    // Generate test data
-    auto points = generate_benchmark_data(n_points);
+  std::cout << "Benchmarking DBSCANGrid2D_L1 with Manhattan distance" << std::endl;
+  std::cout << "eps=" << eps << ", min_samples=" << min_samples << std::endl;
 
-    // Benchmark original DBSCAN
-    bench.title("Original DBSCAN").run("Original DBSCAN " + std::to_string(n_points) + " points", [&]() {
-      dbscan::DBSCAN<double> dbscan(0.8, 5);
-      auto result = dbscan.cluster(points);
-      ankerl::nanobench::doNotOptimizeAway(result);
+  for (const auto &scenario : scenarios) {
+    const std::size_t cluster_points = scenario.clusters * scenario.points_per_cluster;
+    const std::size_t noise_points = cluster_points * 2; // 2x noise compared to clustered points
+
+    auto dataset = generate_uint32_dataset(scenario.clusters, scenario.points_per_cluster, noise_points, area_width,
+                                           cluster_sigma, rng);
+
+    const std::size_t total_points = dataset.x.size();
+    std::cout << "\nScenario: " << scenario.clusters << " clusters, " << scenario.points_per_cluster
+              << " points/cluster, total points=" << total_points << std::endl;
+
+    bench.run("grid-l1 " + std::to_string(total_points) + " pts", [&]() {
+      dbscan::DBSCANGrid2D_L1 algo(eps, min_samples);
+      auto labels = algo.fit_predict(dataset.x.data(), dataset.y.data(), total_points);
+      ankerl::nanobench::doNotOptimizeAway(labels);
     });
-
-    // Benchmark optimized DBSCAN
-    bench.title("Optimized DBSCAN").run("Optimized DBSCAN " + std::to_string(n_points) + " points", [&]() {
-      dbscan::DBSCANOptimized<double> dbscan(0.8, 5);
-      auto result = dbscan.cluster(points);
-      ankerl::nanobench::doNotOptimizeAway(result);
-    });
-
-    // Memory usage comparison
-    {
-      dbscan::DBSCAN<double> original_dbscan(0.8, 5);
-      auto original_result = original_dbscan.cluster(points);
-
-      dbscan::DBSCANOptimized<double> optimized_dbscan(0.8, 5);
-      auto optimized_result = optimized_dbscan.cluster(points);
-
-      std::cout << "Original DBSCAN found " << original_result.num_clusters << " clusters" << std::endl;
-      std::cout << "Optimized DBSCAN found " << optimized_result.num_clusters << " clusters" << std::endl;
-    }
-  }
-
-  // Performance comparison with different parameters
-  std::cout << "\n=== Parameter Sensitivity Benchmark ===" << std::endl;
-
-  auto test_points = generate_benchmark_data(10000);
-
-  // Different eps values
-  std::vector<double> eps_values = {0.3, 0.5, 0.8, 1.2};
-
-  for (double eps : eps_values) {
-    bench.title("EPS Parameter").run("Optimized DBSCAN eps=" + std::to_string(eps), [&]() {
-      dbscan::DBSCANOptimized<double> dbscan(eps, 5);
-      auto result = dbscan.cluster(test_points);
-      ankerl::nanobench::doNotOptimizeAway(result);
-    });
-  }
-
-  // Different min_pts values
-  std::vector<int> min_pts_values = {3, 5, 10, 15};
-
-  for (int min_pts : min_pts_values) {
-    bench.title("MinPts Parameter").run("Optimized DBSCAN min_pts=" + std::to_string(min_pts), [&]() {
-      dbscan::DBSCANOptimized<double> dbscan(0.8, min_pts);
-      auto result = dbscan.cluster(test_points);
-      ankerl::nanobench::doNotOptimizeAway(result);
-    });
-  }
-
-  // Detailed performance analysis
-  std::cout << "\n=== Detailed Performance Analysis ===" << std::endl;
-
-  auto large_dataset = generate_benchmark_data(50000);
-
-  // Time both implementations on larger dataset
-  {
-    std::cout << "Running performance comparison on 50k points..." << std::endl;
-
-    // Original DBSCAN timing
-    auto start_time = std::chrono::high_resolution_clock::now();
-    dbscan::DBSCAN<double> original_dbscan(0.8, 5);
-    auto original_result = original_dbscan.cluster(large_dataset);
-    auto end_time = std::chrono::high_resolution_clock::now();
-    auto original_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-
-    // Optimized DBSCAN timing
-    start_time = std::chrono::high_resolution_clock::now();
-    dbscan::DBSCANOptimized<double> optimized_dbscan(0.8, 5);
-    auto optimized_result = optimized_dbscan.cluster(large_dataset);
-    end_time = std::chrono::high_resolution_clock::now();
-    auto optimized_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-
-    std::cout << "Original DBSCAN: " << original_duration.count() << "ms, " << original_result.num_clusters
-              << " clusters" << std::endl;
-    std::cout << "Optimized DBSCAN: " << optimized_duration.count() << "ms, " << optimized_result.num_clusters
-              << " clusters" << std::endl;
-
-    if (original_duration.count() > 0) {
-      double speedup = static_cast<double>(original_duration.count()) / optimized_duration.count();
-      std::cout << "Speedup: " << speedup << "x" << std::endl;
-    }
   }
 
   return 0;

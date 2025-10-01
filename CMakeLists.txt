@@ -79,6 +79,20 @@ target_include_directories(dbscan_tests
         include
 )
 
+add_executable(dbscan_dataset_validator
+    tools/dbscan_dataset_validator.cpp
+)
+
+target_link_libraries(dbscan_dataset_validator
+    PRIVATE
+        dbscan
+)
+
+target_include_directories(dbscan_dataset_validator
+    PRIVATE
+        include
+)
+
 # Benchmark executable
 add_executable(dbscan_benchmark
     benchmark/benchmark_dbscan.cpp
@@ -102,3 +116,11 @@ target_include_directories(dbscan_benchmark
 # Enable testing
 enable_testing()
 add_test(NAME dbscan_tests COMMAND dbscan_tests)
+
+add_test(
+    NAME dbscan_dataset_validation
+    COMMAND ${CMAKE_COMMAND}
+        -DPROJECT_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DPROJECT_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_dataset_validator.cmake
+)

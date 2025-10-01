@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <ostream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -47,5 +48,9 @@ private:
   std::chrono::steady_clock::time_point start_;
 };
 
-} // namespace dbscan
+inline std::ostream &operator<<(std::ostream &out, const PerfTimingEntry &entry) {
+  out << entry.label << ": " << entry.duration_ms << " ms";
+  return out;
+}
 
+} // namespace dbscan

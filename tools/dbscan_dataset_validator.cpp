@@ -419,6 +419,12 @@ int main(int argc, char **argv) {
       const auto end = std::chrono::steady_clock::now();
       const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
       std::cout << " done in " << elapsed_ms << " ms" << std::endl;
+      if (!grid_algo.perf_timing_.entries().empty()) {
+        // Emit step-level timings so dataset runs surface bottlenecks without separate profiling passes.
+        std::cout << "[grid_l1] component timings" << std::endl;
+        for (const auto &entry : grid_algo.perf_timing_.entries())
+          std::cout << "  " << entry << std::endl;
+      }
       results.push_back({"grid_l1", metrics});
 
       if (options.mismatch_output_dir && !mismatches.empty()) {

@@ -29,13 +29,15 @@ struct Options {
   bool run_baseline{true};
   bool run_optimized{true};
   bool run_grid_l1{false};
+  std::vector<dbscan::GridExpansionMode> grid_modes;
   std::optional<std::filesystem::path> mismatch_output_dir;
 };
 
 void print_usage(const char *program_name) {
   std::cout << "Usage: " << program_name
             << " [--data <data.bin>] [--truth <truth.bin>] [--eps <value>] [--min-samples <value>]"
-            << " [--impl baseline|optimized|grid|both|all] [--dump-mismatches <directory>]\n";
+            << " [--impl baseline|optimized|grid|grid_frontier|grid_union|grid_all|both|all]"
+            << " [--dump-mismatches <directory>]\n";
 }
 
 Options parse_arguments(int argc, char **argv) {
@@ -65,30 +67,54 @@ Options parse_arguments(int argc, char **argv) {
       options.min_samples = static_cast<int32_t>(std::stoi(argv[++i]));
     } else if (arg == "--impl") {
       if (i + 1 >= argc)
-        throw std::invalid_argument("--impl expects one of: baseline, optimized, grid, both, all");
+        throw std::invalid_argument(
+            "--impl expects one of: baseline, optimized, grid, grid_frontier, grid_union, grid_all, both, all");
       const std::string value{argv[++i]};
       if (value == "baseline") {
         options.run_baseline = true;
         options.run_optimized = false;
         options.run_grid_l1 = false;
+        options.grid_modes.clear();
       } else if (value == "optimized") {
         options.run_baseline = false;
         options.run_optimized = true;
         options.run_grid_l1 = false;
+        options.grid_modes.clear();
       } else if (value == "grid" || value == "grid_l1") {
         options.run_baseline = false;
         options.run_optimized = false;
         options.run_grid_l1 = true;
+        options.grid_modes = {dbscan::GridExpansionMode::Sequential};
+      } else if (value == "grid_frontier") {
+        options.run_baseline = false;
+        options.run_optimized = false;
+        options.run_grid_l1 = true;
+        options.grid_modes = {dbscan::GridExpansionMode::FrontierParallel};
+      } else if (value == "grid_union" || value == "grid_union_find") {
+        options.run_baseline = false;
+        options.run_optimized = false;
+        options.run_grid_l1 = true;
+        options.grid_modes = {dbscan::GridExpansionMode::UnionFind};
+      } else if (value == "grid_all") {
+        options.run_baseline = false;
+        options.run_optimized = false;
+        options.run_grid_l1 = true;
+        options.grid_modes = {dbscan::GridExpansionMode::Sequential, dbscan::GridExpansionMode::FrontierParallel,
+                              dbscan::GridExpansionMode::UnionFind};
       } else if (value == "both") {
         options.run_baseline = true;
         options.run_optimized = true;
         options.run_grid_l1 = false;
+        options.grid_modes.clear();
       } else if (value == "all") {
         options.run_baseline = true;
         options.run_optimized = true;
         options.run_grid_l1 = true;
+        if (options.grid_modes.empty())
+          options.grid_modes = {dbscan::GridExpansionMode::Sequential};
       } else {
-        throw std::invalid_argument("--impl expects one of: baseline, optimized, grid, both, all");
+        throw std::invalid_argument(
+            "--impl expects one of: baseline, optimized, grid, grid_frontier, grid_union, grid_all, both, all");
       }
     } else if (arg == "--dump-mismatches") {
       if (i + 1 >= argc)
@@ -103,6 +129,8 @@ Options parse_arguments(int argc, char **argv) {
     throw std::invalid_argument("--eps must be positive");
   if (options.min_samples <= 0)
     throw std::invalid_argument("--min-samples must be positive");
+  if (options.run_grid_l1 && options.grid_modes.empty())
+    options.grid_modes = {dbscan::GridExpansionMode::Sequential};
 
   return options;
 }
@@ -402,6 +430,22 @@ int main(int argc, char **argv) {
       }
     }
 
+    auto grid_variant_info = [](dbscan::GridExpansionMode mode) {
+      struct VariantInfo {
+        std::string label;
+        std::string slug;
+      };
+      switch (mode) {
+      case dbscan::GridExpansionMode::Sequential:
+        return VariantInfo{"grid_l1", "grid_l1"};
+      case dbscan::GridExpansionMode::FrontierParallel:
+        return VariantInfo{"grid_l1_frontier", "grid_l1_frontier"};
+      case dbscan::GridExpansionMode::UnionFind:
+        return VariantInfo{"grid_l1_union", "grid_l1_union"};
+      }
+      return VariantInfo{"grid_l1", "grid_l1"};
+    };
+
     if (options.run_grid_l1) {
       const auto eps_int = static_cast<uint32_t>(std::llround(options.eps));
       if (std::fabs(options.eps - static_cast<double>(eps_int)) > 1e-6) {
@@ -409,33 +453,36 @@ int main(int argc, char **argv) {
       }
       if (x_coords.size() != y_coords.size())
         throw std::runtime_error("Mismatch between x and y coordinate counts");
+      for (auto mode : options.grid_modes) {
+        const auto info = grid_variant_info(mode);
+        std::cout << "\n[" << info.label << "] Running clustering..." << std::flush;
+        const auto start = std::chrono::steady_clock::now();
+        dbscan::DBSCANGrid2D_L1 grid_algo(eps_int, static_cast<uint32_t>(options.min_samples), 0, 0, mode);
+        const auto labels = grid_algo.fit_predict(x_coords.data(), y_coords.data(), x_coords.size());
+        std::vector<std::size_t> mismatches;
+        const auto metrics = evaluate(labels, truth_labels, options.mismatch_output_dir ? &mismatches : nullptr);
+        const auto end = std::chrono::steady_clock::now();
+        const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+        std::cout << " done in " << elapsed_ms << " ms" << std::endl;
+        if (!grid_algo.perf_timing_.entries().empty()) {
+          // Emit step-level timings so dataset runs surface bottlenecks without separate profiling passes.
+          std::cout << "[" << info.label << "] component timings" << std::endl;
+          for (const auto &entry : grid_algo.perf_timing_.entries())
+            std::cout << "  " << entry << std::endl;
+        }
+        results.push_back({info.label, metrics});
 
-      std::cout << "\n[grid_l1] Running clustering..." << std::flush;
-      const auto start = std::chrono::steady_clock::now();
-      dbscan::DBSCANGrid2D_L1 grid_algo(eps_int, static_cast<uint32_t>(options.min_samples));
-      const auto labels = grid_algo.fit_predict(x_coords.data(), y_coords.data(), x_coords.size());
-      std::vector<std::size_t> mismatches;
-      const auto metrics = evaluate(labels, truth_labels, options.mismatch_output_dir ? &mismatches : nullptr);
-      const auto end = std::chrono::steady_clock::now();
-      const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-      std::cout << " done in " << elapsed_ms << " ms" << std::endl;
-      if (!grid_algo.perf_timing_.entries().empty()) {
-        // Emit step-level timings so dataset runs surface bottlenecks without separate profiling passes.
-        std::cout << "[grid_l1] component timings" << std::endl;
-        for (const auto &entry : grid_algo.perf_timing_.entries())
-          std::cout << "  " << entry << std::endl;
-      }
-      results.push_back({"grid_l1", metrics});
-
-      if (options.mismatch_output_dir && !mismatches.empty()) {
-        std::filesystem::create_directories(*options.mismatch_output_dir);
-        auto file_path = *options.mismatch_output_dir / "grid_l1_mismatches.txt";
-        std::ofstream out(file_path);
-        if (!out)
-          throw std::runtime_error("Failed to open mismatch output file: " + file_path.string());
-        for (std::size_t index : mismatches)
-          out << index << '\n';
-        std::cout << "[grid_l1] Wrote " << mismatches.size() << " mismatches to " << file_path << "\n";
+        if (options.mismatch_output_dir && !mismatches.empty()) {
+          std::filesystem::create_directories(*options.mismatch_output_dir);
+          auto file_path = *options.mismatch_output_dir / (info.slug + "_mismatches.txt");
+          std::ofstream out(file_path);
+          if (!out)
+            throw std::runtime_error("Failed to open mismatch output file: " + file_path.string());
+          for (std::size_t index : mismatches)
+            out << index << '\n';
+          std::cout << "[" << info.label << "] Wrote " << mismatches.size() << " mismatches to " << file_path
+                    << "\n";
+        }
       }
     }
 

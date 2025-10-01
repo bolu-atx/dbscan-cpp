@@ -9,6 +9,17 @@
 
 namespace {
 
+std::filesystem::path fixture_root() {
+  const std::filesystem::path candidates[] = {std::filesystem::path{"tests"} / "data",
+                                              std::filesystem::path{".."} / "tests" / "data",
+                                              std::filesystem::path{".."} / ".." / "tests" / "data"};
+  for (const auto &candidate : candidates) {
+    if (std::filesystem::exists(candidate))
+      return candidate;
+  }
+  return candidates[0];
+}
+
 // The binary fixtures store Y first then X to mirror the grid compaction used in production; this loader
 // preserves that ordering so the test exercises identical memory access patterns as the runtime path.
 void load_fixture(const std::filesystem::path &data_path, const std::filesystem::path &truth_path,
@@ -85,7 +96,7 @@ TEST_CASE("DBSCANGrid2D_L1 respects min_samples threshold", "[dbscan][grid_l1]")
 
 TEST_CASE("DBSCANGrid2D_L1 matches fixture truth", "[dbscan][grid_l1]") {
   // Fixture run mirrors the end-to-end validator to ensure the optimized grid path stays aligned with reference data.
-  const std::filesystem::path root = std::filesystem::path{"tests"} / "data";
+  const std::filesystem::path root = fixture_root();
   const auto data_path = root / "dbscan_static_data.bin";
   const auto truth_path = root / "dbscan_static_truth.bin";
 
@@ -99,4 +110,28 @@ TEST_CASE("DBSCANGrid2D_L1 matches fixture truth", "[dbscan][grid_l1]") {
 
   REQUIRE(labels.size() == truth.size());
   REQUIRE(labels == truth);
+
+  dbscan::DBSCANGrid2D_L1Frontier frontier_algo(10, 3, 4);
+  auto frontier_labels = frontier_algo.fit_predict(x.data(), y.data(), x.size());
+  REQUIRE(frontier_labels == truth);
+
+  dbscan::DBSCANGrid2D_L1UnionFind union_algo(10, 3, 4);
+  auto union_labels = union_algo.fit_predict(x.data(), y.data(), x.size());
+  REQUIRE(union_labels == truth);
+}
+
+TEST_CASE("DBSCANGrid2D_L1 parallel variants align with sequential", "[dbscan][grid_l1][parallel]") {
+  const std::vector<uint32_t> x = {0, 1, 2, 5, 40};
+  const std::vector<uint32_t> y = {0, 0, 1, 4, 80};
+
+  dbscan::DBSCANGrid2D_L1 sequential(6, 3);
+  const auto expected = sequential.fit_predict(x.data(), y.data(), x.size());
+
+  dbscan::DBSCANGrid2D_L1Frontier frontier(6, 3, 4);
+  auto frontier_labels = frontier.fit_predict(x.data(), y.data(), x.size());
+  REQUIRE(frontier_labels == expected);
+
+  dbscan::DBSCANGrid2D_L1UnionFind union_algo(6, 3, 4);
+  auto union_labels = union_algo.fit_predict(x.data(), y.data(), x.size());
+  REQUIRE(union_labels == expected);
 }

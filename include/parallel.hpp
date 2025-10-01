@@ -33,4 +33,38 @@ inline void parallel_for(size_t begin, size_t end, size_t n_threads, const std::
     th.join();
 }
 
+inline void parallelize(size_t begin, size_t end, size_t num_threads, size_t chunk_size,
+                        std::function<void(size_t, size_t)> &&chunk_processor) {
+  if (begin >= end)
+    return;
+
+  if (num_threads == 0)
+    num_threads = std::thread::hardware_concurrency();
+  if (num_threads == 0)
+    num_threads = 1;
+
+  if (chunk_size == 0)
+    chunk_size = std::max<std::size_t>(1, (end - begin + num_threads - 1) / num_threads);
+
+  std::atomic<size_t> next_begin{begin};
+  std::vector<std::thread> workers;
+  workers.reserve(num_threads);
+
+  for (size_t thread_idx = 0; thread_idx < num_threads; ++thread_idx) {
+    workers.emplace_back([&, chunk_size]() {
+      while (true) {
+        size_t start = next_begin.fetch_add(chunk_size, std::memory_order_relaxed);
+        if (start >= end)
+          break;
+
+        size_t stop = std::min(end, start + chunk_size);
+        chunk_processor(start, stop);
+      }
+    });
+  }
+
+  for (auto &worker : workers)
+    worker.join();
+}
+
 } // namespace utils

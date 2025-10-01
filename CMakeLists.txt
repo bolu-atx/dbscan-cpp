@@ -67,6 +67,7 @@ add_executable(dbscan_tests
     tests/test_dbscan_optimized.cpp
     tests/test_dbscan_grid2d_l1.cpp
     tests/test_parallel_for.cpp
+    tests/test_parallelize.cpp
     tests/test_union_find.cpp
 )
 

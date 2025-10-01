@@ -66,6 +66,9 @@ int main() {
   ankerl::nanobench::Bench bench;
   bench.title("DBSCANGrid2D_L1");
   bench.relative(true);
+  bench.warmup(2);
+  bench.minEpochIterations(10);
+  bench.unit("pt");
 
   struct Scenario {
     std::size_t clusters;
@@ -73,14 +76,16 @@ int main() {
   };
 
   const std::vector<Scenario> scenarios = {
-      {32, 256},
-      {64, 256},
-      {100, 256},
-      {128, 256},
+      {64, 256},  // ~16K cluster points + 32K noise => ~48K total
+      {128, 256}, // ~32K cluster points + 64K noise => ~96K total
+      {256, 256}, // ~65K cluster points + 131K noise => ~196K total
+      {512, 256}, // ~131K cluster points + 262K noise => ~393K total
+      {640, 256}, // ~163K cluster points + 327K noise => ~490K total
   };
 
   std::cout << "Benchmarking DBSCANGrid2D_L1 with Manhattan distance" << std::endl;
   std::cout << "eps=" << eps << ", min_samples=" << min_samples << std::endl;
+  std::cout << "Thread sweep: 0 (auto), 1, 2, 4, 8" << std::endl;
 
   for (const auto &scenario : scenarios) {
     const std::size_t cluster_points = scenario.clusters * scenario.points_per_cluster;
@@ -93,11 +98,19 @@ int main() {
     std::cout << "\nScenario: " << scenario.clusters << " clusters, " << scenario.points_per_cluster
               << " points/cluster, total points=" << total_points << std::endl;
 
-    bench.run("grid-l1 " + std::to_string(total_points) + " pts", [&]() {
-      dbscan::DBSCANGrid2D_L1 algo(eps, min_samples);
-      auto labels = algo.fit_predict(dataset.x.data(), dataset.y.data(), total_points);
-      ankerl::nanobench::doNotOptimizeAway(labels);
-    });
+    bench.batch(static_cast<double>(total_points));
+    bench.context("points", std::to_string(total_points));
+
+    const std::vector<std::size_t> thread_counts = {0, 1, 2, 4, 8};
+    for (std::size_t thread_count : thread_counts) {
+      const std::string label = "grid-l1 " + std::to_string(total_points) + " pts threads=" +
+                                (thread_count == 0 ? std::string("auto") : std::to_string(thread_count));
+      bench.run(label, [&]() {
+        dbscan::DBSCANGrid2D_L1 algo(eps, min_samples, thread_count);
+        auto labels = algo.fit_predict(dataset.x.data(), dataset.y.data(), total_points);
+        ankerl::nanobench::doNotOptimizeAway(labels);
+      });
+    }
   }
 
   return 0;

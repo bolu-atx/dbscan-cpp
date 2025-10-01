@@ -3,11 +3,12 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <numeric>
 #include <stdexcept>
 #include <utility>
 #include <vector>
+
+#include "parallel.hpp"
 
 namespace dbscan {
 
@@ -72,8 +73,9 @@ void for_each_neighbor(uint32_t point_index, uint32_t eps, const uint32_t *x, co
 
 } // namespace
 
-DBSCANGrid2D_L1::DBSCANGrid2D_L1(uint32_t eps_value, uint32_t min_samples_value)
-    : eps(eps_value), min_samples(min_samples_value) {
+DBSCANGrid2D_L1::DBSCANGrid2D_L1(uint32_t eps_value, uint32_t min_samples_value, std::size_t num_threads_value,
+                                 std::size_t chunk_size_value)
+    : eps(eps_value), min_samples(min_samples_value), num_threads(num_threads_value), chunk_size(chunk_size_value) {
   if (eps == 0)
     throw std::invalid_argument("eps must be greater than zero for DBSCANGrid2D_L1");
   if (min_samples == 0)
@@ -95,13 +97,17 @@ std::vector<int32_t> DBSCANGrid2D_L1::fit_predict(const uint32_t *x, const uint3
   std::vector<uint32_t> ordered_indices(count);
   std::iota(ordered_indices.begin(), ordered_indices.end(), 0U);
 
-  for (std::size_t i = 0; i < count; ++i) {
-    const uint32_t cx = cell_of(x[i], cell_size);
-    const uint32_t cy = cell_of(y[i], cell_size);
-    cell_x[i] = cx;
-    cell_y[i] = cy;
-    keys[i] = pack_cell(cx, cy);
-  }
+  const std::size_t index_chunk = chunk_size == 0 ? 1024 : chunk_size;
+  utils::parallelize(0, count, num_threads, index_chunk,
+                     [&](std::size_t begin, std::size_t end) {
+    for (std::size_t i = begin; i < end; ++i) {
+      const uint32_t cx = cell_of(x[i], cell_size);
+      const uint32_t cy = cell_of(y[i], cell_size);
+      cell_x[i] = cx;
+      cell_y[i] = cy;
+      keys[i] = pack_cell(cx, cy);
+    }
+  });
 
   std::sort(ordered_indices.begin(), ordered_indices.end(), [&](uint32_t lhs, uint32_t rhs) {
     const uint64_t key_lhs = keys[lhs];
@@ -134,17 +140,21 @@ std::vector<int32_t> DBSCANGrid2D_L1::fit_predict(const uint32_t *x, const uint3
   const uint32_t eps_value = eps;
   const uint32_t min_samples_value = min_samples;
 
-  for (std::size_t i = 0; i < count; ++i) {
-    uint32_t neighbor_count = 0;
-    for_each_neighbor(static_cast<uint32_t>(i), eps_value, x, y, cell_x, cell_y, ordered_indices, cell_offsets,
-                      unique_keys, [&](uint32_t) {
-                        ++neighbor_count;
-                        return neighbor_count < min_samples_value;
-                      });
+  const std::size_t core_chunk = chunk_size == 0 ? 512 : chunk_size;
+  utils::parallelize(0, count, num_threads, core_chunk,
+                     [&](std::size_t begin, std::size_t end) {
+    for (std::size_t idx = begin; idx < end; ++idx) {
+      uint32_t neighbor_count = 0;
+      for_each_neighbor(static_cast<uint32_t>(idx), eps_value, x, y, cell_x, cell_y, ordered_indices, cell_offsets,
+                        unique_keys, [&](uint32_t) {
+                          ++neighbor_count;
+                          return neighbor_count < min_samples_value;
+                        });
 
-    if (neighbor_count >= min_samples_value)
-      is_core[i] = 1U;
-  }
+      if (neighbor_count >= min_samples_value)
+        is_core[idx] = 1U;
+    }
+  });
 
   std::vector<uint32_t> stack;
   stack.reserve(count);

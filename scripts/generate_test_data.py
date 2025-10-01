@@ -51,6 +51,12 @@ def parse_args() -> argparse.Namespace:
         help="DBSCAN epsilon radius in pixels for scikit-learn clustering (default: 60).",
     )
     parser.add_argument(
+        "--metric",
+        type=str,
+        default="l2",
+        help="Distance metric: 'l2' (Euclidean) or 'l1' (Manhattan).",
+    )
+    parser.add_argument(
         "--min-samples",
         type=int,
         default=16,
@@ -143,7 +149,15 @@ def main() -> None:
     # Prepare float coordinates for clustering (x, y order for scikit-learn).
     coords_xy_float = all_coords_yx[:, [1, 0]].astype(np.float64)
 
-    dbscan = DBSCAN(eps=args.eps, min_samples=args.min_samples, n_jobs=-1)
+    metric = args.metric.lower()
+    if metric == "l1":
+        sklearn_metric = "cityblock"
+    elif metric == "l2":
+        sklearn_metric = "euclidean"
+    else:
+        raise ValueError("Unsupported metric. Choose 'l1' or 'l2'.")
+
+    dbscan = DBSCAN(eps=args.eps, min_samples=args.min_samples, metric=sklearn_metric, n_jobs=-1)
     labels = dbscan.fit_predict(coords_xy_float)
 
     # Persist data in requested layout: (y, x) pairs as uint32.
@@ -156,7 +170,9 @@ def main() -> None:
 
     print(f"Generated {all_coords_yx.shape[0]} total points.")
     print(f"Uniform points: {uniform_coords.shape[0]}, clustered points: {cluster_coords.shape[0]}.")
-    print(f"DBSCAN discovered {cluster_labels.size} clusters and {noise_count} noise points.")
+    print(
+        f"DBSCAN ({metric.upper()}) discovered {cluster_labels.size} clusters and {noise_count} noise points."
+    )
     print(f"Data written to {args.data_file.resolve()} and labels to {args.truth_file.resolve()}.")
 
 

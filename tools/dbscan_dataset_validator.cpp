@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -14,6 +15,7 @@
 #include <vector>
 
 #include "dbscan.h"
+#include "dbscan_grid2d_l1.h"
 #include "dbscan_optimized.h"
 
 namespace {
@@ -24,14 +26,16 @@ struct Options {
   double eps{60.0};
   int32_t min_samples{16};
 
-  enum class Implementation { Baseline, Optimized, Both } implementation{Implementation::Both};
+  bool run_baseline{true};
+  bool run_optimized{true};
+  bool run_grid_l1{false};
   std::optional<std::filesystem::path> mismatch_output_dir;
 };
 
 void print_usage(const char *program_name) {
   std::cout << "Usage: " << program_name
             << " [--data <data.bin>] [--truth <truth.bin>] [--eps <value>] [--min-samples <value>]"
-            << " [--impl baseline|optimized|both] [--dump-mismatches <directory>]\n";
+            << " [--impl baseline|optimized|grid|both|all] [--dump-mismatches <directory>]\n";
 }
 
 Options parse_arguments(int argc, char **argv) {
@@ -61,16 +65,30 @@ Options parse_arguments(int argc, char **argv) {
       options.min_samples = static_cast<int32_t>(std::stoi(argv[++i]));
     } else if (arg == "--impl") {
       if (i + 1 >= argc)
-        throw std::invalid_argument("--impl expects one of: baseline, optimized, both");
+        throw std::invalid_argument("--impl expects one of: baseline, optimized, grid, both, all");
       const std::string value{argv[++i]};
       if (value == "baseline") {
-        options.implementation = Options::Implementation::Baseline;
+        options.run_baseline = true;
+        options.run_optimized = false;
+        options.run_grid_l1 = false;
       } else if (value == "optimized") {
-        options.implementation = Options::Implementation::Optimized;
+        options.run_baseline = false;
+        options.run_optimized = true;
+        options.run_grid_l1 = false;
+      } else if (value == "grid" || value == "grid_l1") {
+        options.run_baseline = false;
+        options.run_optimized = false;
+        options.run_grid_l1 = true;
       } else if (value == "both") {
-        options.implementation = Options::Implementation::Both;
+        options.run_baseline = true;
+        options.run_optimized = true;
+        options.run_grid_l1 = false;
+      } else if (value == "all") {
+        options.run_baseline = true;
+        options.run_optimized = true;
+        options.run_grid_l1 = true;
       } else {
-        throw std::invalid_argument("--impl expects one of: baseline, optimized, both");
+        throw std::invalid_argument("--impl expects one of: baseline, optimized, grid, both, all");
       }
     } else if (arg == "--dump-mismatches") {
       if (i + 1 >= argc)
@@ -89,7 +107,8 @@ Options parse_arguments(int argc, char **argv) {
   return options;
 }
 
-std::vector<dbscan::Point<double>> load_points(const std::filesystem::path &path) {
+std::vector<dbscan::Point<double>> load_points(const std::filesystem::path &path, std::vector<uint32_t> *x_out,
+                                               std::vector<uint32_t> *y_out) {
   std::ifstream stream(path, std::ios::binary);
   if (!stream)
     throw std::runtime_error("Failed to open data file: " + path.string());
@@ -110,10 +129,19 @@ std::vector<dbscan::Point<double>> load_points(const std::filesystem::path &path
     throw std::runtime_error("Failed to read data file: " + path.string());
 
   std::vector<dbscan::Point<double>> points(num_points);
+  if (x_out)
+    x_out->assign(num_points, 0U);
+  if (y_out)
+    y_out->assign(num_points, 0U);
+
   for (std::size_t i = 0; i < num_points; ++i) {
     const uint32_t y = raw[2 * i];
     const uint32_t x = raw[2 * i + 1];
     points[i] = dbscan::Point<double>{static_cast<double>(x), static_cast<double>(y)};
+    if (x_out)
+      (*x_out)[i] = x;
+    if (y_out)
+      (*y_out)[i] = y;
   }
 
   return points;
@@ -306,7 +334,9 @@ int main(int argc, char **argv) {
   try {
     const Options options = parse_arguments(argc, argv);
 
-    const auto points = load_points(options.data_path);
+    std::vector<uint32_t> x_coords;
+    std::vector<uint32_t> y_coords;
+    const auto points = load_points(options.data_path, &x_coords, &y_coords);
     const auto truth_labels = load_labels(options.truth_path);
 
     if (points.size() != truth_labels.size())
@@ -320,10 +350,9 @@ int main(int argc, char **argv) {
     std::cout << "Ground truth clusters: " << truth_cluster_count << "; noise points: " << truth_noise_count << "\n";
 
     std::vector<RunResult> results;
-    results.reserve(2);
+    results.reserve(3);
 
-    if (options.implementation == Options::Implementation::Baseline ||
-        options.implementation == Options::Implementation::Both) {
+    if (options.run_baseline) {
       std::cout << "\n[baseline] Running clustering..." << std::flush;
       const auto start = std::chrono::steady_clock::now();
       dbscan::DBSCAN<double> baseline(options.eps, options.min_samples);
@@ -348,8 +377,7 @@ int main(int argc, char **argv) {
       }
     }
 
-    if (options.implementation == Options::Implementation::Optimized ||
-        options.implementation == Options::Implementation::Both) {
+    if (options.run_optimized) {
       std::cout << "\n[optimized] Running clustering..." << std::flush;
       const auto start = std::chrono::steady_clock::now();
       dbscan::DBSCANOptimized<double> optimized(options.eps, options.min_samples);
@@ -371,6 +399,37 @@ int main(int argc, char **argv) {
         for (std::size_t index : mismatches)
           out << index << '\n';
         std::cout << "[optimized] Wrote " << mismatches.size() << " mismatches to " << file_path << "\n";
+      }
+    }
+
+    if (options.run_grid_l1) {
+      const auto eps_int = static_cast<uint32_t>(std::llround(options.eps));
+      if (std::fabs(options.eps - static_cast<double>(eps_int)) > 1e-6) {
+        throw std::invalid_argument("grid_l1 implementation requires integer eps value");
+      }
+      if (x_coords.size() != y_coords.size())
+        throw std::runtime_error("Mismatch between x and y coordinate counts");
+
+      std::cout << "\n[grid_l1] Running clustering..." << std::flush;
+      const auto start = std::chrono::steady_clock::now();
+      dbscan::DBSCANGrid2D_L1 grid_algo(eps_int, static_cast<uint32_t>(options.min_samples));
+      const auto labels = grid_algo.fit_predict(x_coords.data(), y_coords.data(), x_coords.size());
+      std::vector<std::size_t> mismatches;
+      const auto metrics = evaluate(labels, truth_labels, options.mismatch_output_dir ? &mismatches : nullptr);
+      const auto end = std::chrono::steady_clock::now();
+      const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+      std::cout << " done in " << elapsed_ms << " ms" << std::endl;
+      results.push_back({"grid_l1", metrics});
+
+      if (options.mismatch_output_dir && !mismatches.empty()) {
+        std::filesystem::create_directories(*options.mismatch_output_dir);
+        auto file_path = *options.mismatch_output_dir / "grid_l1_mismatches.txt";
+        std::ofstream out(file_path);
+        if (!out)
+          throw std::runtime_error("Failed to open mismatch output file: " + file_path.string());
+        for (std::size_t index : mismatches)
+          out << index << '\n';
+        std::cout << "[grid_l1] Wrote " << mismatches.size() << " mismatches to " << file_path << "\n";
       }
     }
 

@@ -9,11 +9,13 @@
 #include <vector>
 
 #include "parallel.hpp"
+#include "perf_timer.h"
 
 namespace dbscan {
 
 namespace {
 
+// Compact 2D cell coordinates into a sortable key so we can reuse std::sort rather than bespoke grid maps.
 constexpr uint64_t pack_cell(uint32_t ix, uint32_t iy) noexcept {
   return (static_cast<uint64_t>(ix) << 32U) | static_cast<uint64_t>(iy);
 }
@@ -22,6 +24,8 @@ constexpr uint32_t cell_of(uint32_t value, uint32_t cell_size) noexcept {
   return cell_size == 0 ? value : static_cast<uint32_t>(value / cell_size);
 }
 
+// Neighbors are explored by scanning adjacent grid cells so that the expensive L1 radius test only touches
+// candidates that share the precomputed bucket, keeping the branch predictor in our favor.
 template <typename Fn>
 void for_each_neighbor(uint32_t point_index, uint32_t eps, const uint32_t *x, const uint32_t *y,
                        const std::vector<uint32_t> &cell_x, const std::vector<uint32_t> &cell_y,
@@ -82,12 +86,15 @@ DBSCANGrid2D_L1::DBSCANGrid2D_L1(uint32_t eps_value, uint32_t min_samples_value,
     throw std::invalid_argument("min_samples must be greater than zero for DBSCANGrid2D_L1");
 }
 
-std::vector<int32_t> DBSCANGrid2D_L1::fit_predict(const uint32_t *x, const uint32_t *y, std::size_t count) const {
+std::vector<int32_t> DBSCANGrid2D_L1::fit_predict(const uint32_t *x, const uint32_t *y, std::size_t count) {
   if (x == nullptr || y == nullptr)
     throw std::invalid_argument("Input coordinate arrays must be non-null");
 
   if (count == 0)
     return {};
+
+  perf_timing_.clear();
+  ScopedTimer total_timer("total", perf_timing_);
 
   const uint32_t cell_size = eps;
 
@@ -98,41 +105,52 @@ std::vector<int32_t> DBSCANGrid2D_L1::fit_predict(const uint32_t *x, const uint3
   std::iota(ordered_indices.begin(), ordered_indices.end(), 0U);
 
   const std::size_t index_chunk = chunk_size == 0 ? 1024 : chunk_size;
-  utils::parallelize(0, count, num_threads, index_chunk,
-                     [&](std::size_t begin, std::size_t end) {
-    for (std::size_t i = begin; i < end; ++i) {
-      const uint32_t cx = cell_of(x[i], cell_size);
-      const uint32_t cy = cell_of(y[i], cell_size);
-      cell_x[i] = cx;
-      cell_y[i] = cy;
-      keys[i] = pack_cell(cx, cy);
-    }
-  });
+  {
+    // Precompute grid placements in parallel so later stages can stay read-only and avoid rehashing coordinates.
+    ScopedTimer timer("precompute_cells", perf_timing_);
+    utils::parallelize(0, count, num_threads, index_chunk, [&](std::size_t begin, std::size_t end) {
+      for (std::size_t i = begin; i < end; ++i) {
+        const uint32_t cx = cell_of(x[i], cell_size);
+        const uint32_t cy = cell_of(y[i], cell_size);
+        cell_x[i] = cx;
+        cell_y[i] = cy;
+        keys[i] = pack_cell(cx, cy);
+      }
+    });
+  }
 
-  std::sort(ordered_indices.begin(), ordered_indices.end(), [&](uint32_t lhs, uint32_t rhs) {
-    const uint64_t key_lhs = keys[lhs];
-    const uint64_t key_rhs = keys[rhs];
-    if (key_lhs == key_rhs)
-      return lhs < rhs;
-    return key_lhs < key_rhs;
-  });
+  {
+    // Sorting indices by packed cell ensures neighbors form contiguous spans which we can scan without lookups.
+    ScopedTimer timer("sort_indices", perf_timing_);
+    std::sort(ordered_indices.begin(), ordered_indices.end(), [&](uint32_t lhs, uint32_t rhs) {
+      const uint64_t key_lhs = keys[lhs];
+      const uint64_t key_rhs = keys[rhs];
+      if (key_lhs == key_rhs)
+        return lhs < rhs;
+      return key_lhs < key_rhs;
+    });
+  }
 
   std::vector<std::size_t> cell_offsets;
   cell_offsets.reserve(count + 1);
   std::vector<uint64_t> unique_keys;
   unique_keys.reserve(count);
 
-  std::size_t pos = 0;
-  while (pos < count) {
-    const uint64_t key = keys[ordered_indices[pos]];
-    unique_keys.push_back(key);
-    cell_offsets.push_back(pos);
+  {
+    // Build a CSR-style view of the sorted cells so we can jump directly to the occupants of any neighboring bucket.
+    ScopedTimer timer("build_cell_offsets", perf_timing_);
+    std::size_t pos = 0;
+    while (pos < count) {
+      const uint64_t key = keys[ordered_indices[pos]];
+      unique_keys.push_back(key);
+      cell_offsets.push_back(pos);
 
-    do {
-      ++pos;
-    } while (pos < count && keys[ordered_indices[pos]] == key);
+      do {
+        ++pos;
+      } while (pos < count && keys[ordered_indices[pos]] == key);
+    }
+    cell_offsets.push_back(count);
   }
-  cell_offsets.push_back(count);
 
   std::vector<int32_t> labels(count, -1);
   std::vector<uint8_t> is_core(count, 0U);
@@ -141,56 +159,68 @@ std::vector<int32_t> DBSCANGrid2D_L1::fit_predict(const uint32_t *x, const uint3
   const uint32_t min_samples_value = min_samples;
 
   const std::size_t core_chunk = chunk_size == 0 ? 512 : chunk_size;
-  utils::parallelize(0, count, num_threads, core_chunk,
-                     [&](std::size_t begin, std::size_t end) {
-    for (std::size_t idx = begin; idx < end; ++idx) {
-      uint32_t neighbor_count = 0;
-      for_each_neighbor(static_cast<uint32_t>(idx), eps_value, x, y, cell_x, cell_y, ordered_indices, cell_offsets,
-                        unique_keys, [&](uint32_t) {
-                          ++neighbor_count;
-                          return neighbor_count < min_samples_value;
-                        });
+  {
+    // Core detection runs as an isolated pass so expansion can treat label writes as the only mutation, simplifying
+    // synchronization even when the search function is invoked concurrently.
+    ScopedTimer timer("core_detection", perf_timing_);
+    utils::parallelize(0, count, num_threads, core_chunk, [&](std::size_t begin, std::size_t end) {
+      for (std::size_t idx = begin; idx < end; ++idx) {
+        uint32_t neighbor_count = 0;
+        for_each_neighbor(static_cast<uint32_t>(idx), eps_value, x, y, cell_x, cell_y, ordered_indices, cell_offsets,
+                          unique_keys, [&](uint32_t) {
+                            ++neighbor_count;
+                            return neighbor_count < min_samples_value;
+                          });
 
-      if (neighbor_count >= min_samples_value)
-        is_core[idx] = 1U;
-    }
-  });
+        if (neighbor_count >= min_samples_value)
+          is_core[idx] = 1U;
+      }
+    });
+  }
 
+  // Stack-based expansion keeps the cluster growth iterative, avoiding recursion while allowing work reuse.
   std::vector<uint32_t> stack;
   stack.reserve(count);
+
+  // Recycle a neighbor buffer per cluster to amortize allocations across large components.
   std::vector<uint32_t> neighbor_buffer;
   neighbor_buffer.reserve(64);
 
   int32_t next_label = 0;
-  for (std::size_t i = 0; i < count; ++i) {
-    if (!is_core[i] || labels[i] != -1)
-      continue;
+  {
+    ScopedTimer timer("cluster_expansion", perf_timing_);
+    for (std::size_t i = 0; i < count; ++i) {
+      if (!is_core[i] || labels[i] != -1)
+        continue;
 
-    labels[i] = next_label;
-    stack.clear();
-    stack.push_back(static_cast<uint32_t>(i));
+      labels[i] = next_label;
+      stack.clear();
+      stack.push_back(static_cast<uint32_t>(i));
 
-    while (!stack.empty()) {
-      const uint32_t current = stack.back();
-      stack.pop_back();
+      while (!stack.empty()) {
+        const uint32_t current = stack.back();
+        stack.pop_back();
 
-      neighbor_buffer.clear();
-      for_each_neighbor(current, eps_value, x, y, cell_x, cell_y, ordered_indices, cell_offsets, unique_keys,
-                        [&](uint32_t neighbor) {
-                          neighbor_buffer.push_back(neighbor);
-                          return true;
-                        });
+        neighbor_buffer.clear();
+        // Capture neighbors into a buffer first so every touch of labels happens after the search, keeping the
+        // expansion phase deterministic regardless of how for_each_neighbor yields matches.
+        for_each_neighbor(current, eps_value, x, y, cell_x, cell_y, ordered_indices, cell_offsets, unique_keys,
+                          [&](uint32_t neighbor) {
+                            neighbor_buffer.push_back(neighbor);
+                            return true;
+                          });
 
-      for (uint32_t neighbor : neighbor_buffer) {
-        if (labels[neighbor] == -1) {
-          labels[neighbor] = next_label;
-          if (is_core[neighbor])
-            stack.push_back(neighbor);
+        for (uint32_t neighbor : neighbor_buffer) {
+          if (labels[neighbor] == -1) {
+            labels[neighbor] = next_label;
+            if (is_core[neighbor])
+              stack.push_back(neighbor);
+          }
         }
       }
-    }
 
-    ++next_label;
+      ++next_label;
+    }
   }
 
   return labels;

@@ -9,6 +9,8 @@
 
 namespace {
 
+// The binary fixtures store Y first then X to mirror the grid compaction used in production; this loader
+// preserves that ordering so the test exercises identical memory access patterns as the runtime path.
 void load_fixture(const std::filesystem::path &data_path, const std::filesystem::path &truth_path,
                   std::vector<uint32_t> &x_out, std::vector<uint32_t> &y_out, std::vector<int32_t> &truth_out) {
   std::ifstream data_stream(data_path, std::ios::binary);
@@ -54,6 +56,8 @@ void load_fixture(const std::filesystem::path &data_path, const std::filesystem:
 } // namespace
 
 TEST_CASE("DBSCANGrid2D_L1 clusters dense neighbors", "[dbscan][grid_l1]") {
+  // Points are arranged so the Manhattan frontier just connects the first three but leaves the outlier isolated,
+  // validating that the L1 grid expansion covers diagonals without absorbing distant noise.
   const std::vector<uint32_t> x = {0, 1, 2, 100};
   const std::vector<uint32_t> y = {0, 0, 1, 200};
 
@@ -68,6 +72,7 @@ TEST_CASE("DBSCANGrid2D_L1 clusters dense neighbors", "[dbscan][grid_l1]") {
 }
 
 TEST_CASE("DBSCANGrid2D_L1 respects min_samples threshold", "[dbscan][grid_l1]") {
+  // Every point is deliberately spaced just beyond eps so we confirm the min_samples guard suppresses tiny clusters.
   const std::vector<uint32_t> coords = {0, 2, 4};
   dbscan::DBSCANGrid2D_L1 algo(3, 4);
   auto labels = algo.fit_predict(coords.data(), coords.data(), coords.size());
@@ -79,6 +84,7 @@ TEST_CASE("DBSCANGrid2D_L1 respects min_samples threshold", "[dbscan][grid_l1]")
 }
 
 TEST_CASE("DBSCANGrid2D_L1 matches fixture truth", "[dbscan][grid_l1]") {
+  // Fixture run mirrors the end-to-end validator to ensure the optimized grid path stays aligned with reference data.
   const std::filesystem::path root = std::filesystem::path{"tests"} / "data";
   const auto data_path = root / "dbscan_static_data.bin";
   const auto truth_path = root / "dbscan_static_truth.bin";

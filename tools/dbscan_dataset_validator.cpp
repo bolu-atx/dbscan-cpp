@@ -454,39 +454,52 @@ int main(int argc, char **argv) {
       if (x_coords.size() != y_coords.size())
         throw std::runtime_error("Mismatch between x and y coordinate counts");
       dbscan::DBSCANGrid2DL1Params params{eps_int, static_cast<uint32_t>(options.min_samples)};
+      std::vector<dbscan::Grid2DPoint> aos_points;
+      aos_points.reserve(x_coords.size());
+      for (std::size_t i = 0; i < x_coords.size(); ++i)
+        aos_points.push_back(dbscan::Grid2DPoint{x_coords[i], y_coords[i]});
       for (auto mode : options.grid_modes) {
         const auto info = grid_variant_info(mode);
-        std::cout << "\n[" << info.label << "] Running clustering..." << std::flush;
-        const auto start = std::chrono::steady_clock::now();
-        const auto result = dbscan::dbscan_grid2d_l1(x_coords.data(), 1, y_coords.data(), 1, x_coords.size(), params,
-                                                     mode);
-        const auto end = std::chrono::steady_clock::now();
-        const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-        std::cout << " done in " << elapsed_ms << " ms" << std::endl;
+        const auto run_layout = [&](const std::string &layout, auto &&invoke) {
+          const std::string display_label = info.label + "/" + layout;
+          std::cout << "\n[" << display_label << "] Running clustering..." << std::flush;
+          const auto start = std::chrono::steady_clock::now();
+          const auto result = invoke();
+          const auto end = std::chrono::steady_clock::now();
+          const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+          std::cout << " done in " << elapsed_ms << " ms" << std::endl;
 
-        std::vector<std::size_t> mismatches;
-        const auto metrics =
-            evaluate(result.labels, truth_labels, options.mismatch_output_dir ? &mismatches : nullptr);
+          std::vector<std::size_t> mismatches;
+          const auto metrics =
+              evaluate(result.labels, truth_labels, options.mismatch_output_dir ? &mismatches : nullptr);
 
-        if (!result.perf_timing.entries().empty()) {
-          // Emit step-level timings so dataset runs surface bottlenecks without separate profiling passes.
-          std::cout << "[" << info.label << "] component timings" << std::endl;
-          for (const auto &entry : result.perf_timing.entries())
-            std::cout << "  " << entry << std::endl;
-        }
-        results.push_back({info.label, metrics});
+          if (!result.perf_timing.entries().empty()) {
+            std::cout << "[" << display_label << "] component timings" << std::endl;
+            for (const auto &entry : result.perf_timing.entries())
+              std::cout << "  " << entry << std::endl;
+          }
+          results.push_back({display_label, metrics});
 
-        if (options.mismatch_output_dir && !mismatches.empty()) {
-          std::filesystem::create_directories(*options.mismatch_output_dir);
-          auto file_path = *options.mismatch_output_dir / (info.slug + "_mismatches.txt");
-          std::ofstream out(file_path);
-          if (!out)
-            throw std::runtime_error("Failed to open mismatch output file: " + file_path.string());
-          for (std::size_t index : mismatches)
-            out << index << '\n';
-          std::cout << "[" << info.label << "] Wrote " << mismatches.size() << " mismatches to " << file_path
-                    << "\n";
-        }
+          if (options.mismatch_output_dir && !mismatches.empty()) {
+            std::filesystem::create_directories(*options.mismatch_output_dir);
+            auto file_path = *options.mismatch_output_dir / (info.slug + "_" + layout + "_mismatches.txt");
+            std::ofstream out(file_path);
+            if (!out)
+              throw std::runtime_error("Failed to open mismatch output file: " + file_path.string());
+            for (std::size_t index : mismatches)
+              out << index << '\n';
+            std::cout << "[" << display_label << "] Wrote " << mismatches.size() << " mismatches to " << file_path
+                      << "\n";
+          }
+        };
+
+        run_layout("soa", [&]() {
+          return dbscan::dbscan_grid2d_l1(x_coords.data(), 1, y_coords.data(), 1, x_coords.size(), params, mode);
+        });
+
+        run_layout("aos", [&]() {
+          return dbscan::dbscan_grid2d_l1_aos(aos_points.data(), aos_points.size(), params, mode);
+        });
       }
     }
 

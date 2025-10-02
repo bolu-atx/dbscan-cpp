@@ -64,38 +64,45 @@ void load_fixture(const std::filesystem::path &data_path, const std::filesystem:
   REQUIRE(truth_stream.good());
 }
 
+std::vector<dbscan::Grid2DPoint> make_aos(const std::vector<uint32_t> &x, const std::vector<uint32_t> &y) {
+  std::vector<dbscan::Grid2DPoint> points(x.size());
+  for (std::size_t i = 0; i < points.size(); ++i)
+    points[i] = dbscan::Grid2DPoint{x[i], y[i]};
+  return points;
+}
+
 } // namespace
 
 TEST_CASE("DBSCANGrid2D_L1 clusters dense neighbors", "[dbscan][grid_l1]") {
-  // Points are arranged so the Manhattan frontier just connects the first three but leaves the outlier isolated,
-  // validating that the L1 grid expansion covers diagonals without absorbing distant noise.
   const std::vector<uint32_t> x = {0, 1, 2, 100};
   const std::vector<uint32_t> y = {0, 0, 1, 200};
 
-  dbscan::DBSCANGrid2D_L1 algo(4, 3);
-  auto labels = algo.fit_predict(x.data(), y.data(), x.size());
+  const dbscan::DBSCANGrid2DL1Params params{4, 3};
+  const auto soa_result = dbscan::dbscan_grid2d_l1(x.data(), 1, y.data(), 1, x.size(), params);
+  const auto &labels = soa_result.labels;
 
   REQUIRE(labels.size() == x.size());
   REQUIRE(labels[0] == labels[1]);
   REQUIRE(labels[1] == labels[2]);
   REQUIRE(labels[0] != -1);
   REQUIRE(labels[3] == -1);
+
+  const auto aos_points = make_aos(x, y);
+  const auto aos_result = dbscan::dbscan_grid2d_l1_aos(aos_points.data(), aos_points.size(), params);
+  REQUIRE(aos_result.labels == labels);
 }
 
 TEST_CASE("DBSCANGrid2D_L1 respects min_samples threshold", "[dbscan][grid_l1]") {
-  // Every point is deliberately spaced just beyond eps so we confirm the min_samples guard suppresses tiny clusters.
   const std::vector<uint32_t> coords = {0, 2, 4};
-  dbscan::DBSCANGrid2D_L1 algo(3, 4);
-  auto labels = algo.fit_predict(coords.data(), coords.data(), coords.size());
-
-  REQUIRE(labels.size() == coords.size());
-  for (int32_t label : labels) {
+  const dbscan::DBSCANGrid2DL1Params params{3, 4};
+  const auto result = dbscan::dbscan_grid2d_l1(coords.data(), 1, coords.data(), 1, coords.size(), params);
+  REQUIRE(result.labels.size() == coords.size());
+  for (int32_t label : result.labels) {
     REQUIRE(label == -1);
   }
 }
 
 TEST_CASE("DBSCANGrid2D_L1 matches fixture truth", "[dbscan][grid_l1]") {
-  // Fixture run mirrors the end-to-end validator to ensure the optimized grid path stays aligned with reference data.
   const std::filesystem::path root = fixture_root();
   const auto data_path = root / "dbscan_static_data.bin";
   const auto truth_path = root / "dbscan_static_truth.bin";
@@ -105,33 +112,33 @@ TEST_CASE("DBSCANGrid2D_L1 matches fixture truth", "[dbscan][grid_l1]") {
   std::vector<int32_t> truth;
   load_fixture(data_path, truth_path, x, y, truth);
 
-  dbscan::DBSCANGrid2D_L1 algo(10, 3);
-  auto labels = algo.fit_predict(x.data(), y.data(), x.size());
+  const dbscan::DBSCANGrid2DL1Params params{10, 3};
+  const auto sequential = dbscan::dbscan_grid2d_l1(x.data(), 1, y.data(), 1, x.size(), params);
+  REQUIRE(sequential.labels == truth);
 
-  REQUIRE(labels.size() == truth.size());
-  REQUIRE(labels == truth);
+  const auto frontier =
+      dbscan::dbscan_grid2d_l1(x.data(), 1, y.data(), 1, x.size(), params, dbscan::GridExpansionMode::FrontierParallel);
+  REQUIRE(frontier.labels == truth);
 
-  dbscan::DBSCANGrid2D_L1Frontier frontier_algo(10, 3, 4);
-  auto frontier_labels = frontier_algo.fit_predict(x.data(), y.data(), x.size());
-  REQUIRE(frontier_labels == truth);
-
-  dbscan::DBSCANGrid2D_L1UnionFind union_algo(10, 3, 4);
-  auto union_labels = union_algo.fit_predict(x.data(), y.data(), x.size());
-  REQUIRE(union_labels == truth);
+  const auto union_find =
+      dbscan::dbscan_grid2d_l1(x.data(), 1, y.data(), 1, x.size(), params, dbscan::GridExpansionMode::UnionFind);
+  REQUIRE(union_find.labels == truth);
 }
 
 TEST_CASE("DBSCANGrid2D_L1 parallel variants align with sequential", "[dbscan][grid_l1][parallel]") {
   const std::vector<uint32_t> x = {0, 1, 2, 5, 40};
   const std::vector<uint32_t> y = {0, 0, 1, 4, 80};
 
-  dbscan::DBSCANGrid2D_L1 sequential(6, 3);
-  const auto expected = sequential.fit_predict(x.data(), y.data(), x.size());
+  dbscan::DBSCANGrid2DL1Params params{6, 3};
+  params.num_threads = 4;
 
-  dbscan::DBSCANGrid2D_L1Frontier frontier(6, 3, 4);
-  auto frontier_labels = frontier.fit_predict(x.data(), y.data(), x.size());
-  REQUIRE(frontier_labels == expected);
+  const auto sequential = dbscan::dbscan_grid2d_l1(x.data(), 1, y.data(), 1, x.size(), params);
 
-  dbscan::DBSCANGrid2D_L1UnionFind union_algo(6, 3, 4);
-  auto union_labels = union_algo.fit_predict(x.data(), y.data(), x.size());
-  REQUIRE(union_labels == expected);
+  const auto frontier =
+      dbscan::dbscan_grid2d_l1(x.data(), 1, y.data(), 1, x.size(), params, dbscan::GridExpansionMode::FrontierParallel);
+  REQUIRE(frontier.labels == sequential.labels);
+
+  const auto union_find =
+      dbscan::dbscan_grid2d_l1(x.data(), 1, y.data(), 1, x.size(), params, dbscan::GridExpansionMode::UnionFind);
+  REQUIRE(union_find.labels == sequential.labels);
 }

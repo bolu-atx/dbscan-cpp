@@ -20,6 +20,7 @@ add_library(dbscan STATIC
     src/dbscan.cpp
     src/dbscan_optimized.cpp
     src/dbscan_grid2d_l1.cpp
+    src/dbscan_grid2d_l1_aos.cpp
 )
 
 target_include_directories(dbscan

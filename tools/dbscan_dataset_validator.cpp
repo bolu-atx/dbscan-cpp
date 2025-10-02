@@ -453,21 +453,25 @@ int main(int argc, char **argv) {
       }
       if (x_coords.size() != y_coords.size())
         throw std::runtime_error("Mismatch between x and y coordinate counts");
+      dbscan::DBSCANGrid2DL1Params params{eps_int, static_cast<uint32_t>(options.min_samples)};
       for (auto mode : options.grid_modes) {
         const auto info = grid_variant_info(mode);
         std::cout << "\n[" << info.label << "] Running clustering..." << std::flush;
         const auto start = std::chrono::steady_clock::now();
-        dbscan::DBSCANGrid2D_L1 grid_algo(eps_int, static_cast<uint32_t>(options.min_samples), 0, 0, mode);
-        const auto labels = grid_algo.fit_predict(x_coords.data(), y_coords.data(), x_coords.size());
-        std::vector<std::size_t> mismatches;
-        const auto metrics = evaluate(labels, truth_labels, options.mismatch_output_dir ? &mismatches : nullptr);
+        const auto result = dbscan::dbscan_grid2d_l1(x_coords.data(), 1, y_coords.data(), 1, x_coords.size(), params,
+                                                     mode);
         const auto end = std::chrono::steady_clock::now();
         const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
         std::cout << " done in " << elapsed_ms << " ms" << std::endl;
-        if (!grid_algo.perf_timing_.entries().empty()) {
+
+        std::vector<std::size_t> mismatches;
+        const auto metrics =
+            evaluate(result.labels, truth_labels, options.mismatch_output_dir ? &mismatches : nullptr);
+
+        if (!result.perf_timing.entries().empty()) {
           // Emit step-level timings so dataset runs surface bottlenecks without separate profiling passes.
           std::cout << "[" << info.label << "] component timings" << std::endl;
-          for (const auto &entry : grid_algo.perf_timing_.entries())
+          for (const auto &entry : result.perf_timing.entries())
             std::cout << "  " << entry << std::endl;
         }
         results.push_back({info.label, metrics});

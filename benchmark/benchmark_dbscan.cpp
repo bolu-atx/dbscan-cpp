@@ -106,9 +106,11 @@ int main() {
       const std::string label = "grid-l1 " + std::to_string(total_points) + " pts threads=" +
                                 (thread_count == 0 ? std::string("auto") : std::to_string(thread_count));
       bench.run(label, [&]() {
-        dbscan::DBSCANGrid2D_L1 algo(eps, min_samples, thread_count);
-        auto labels = algo.fit_predict(dataset.x.data(), dataset.y.data(), total_points);
-        ankerl::nanobench::doNotOptimizeAway(labels);
+        dbscan::DBSCANGrid2DL1Params params{eps, min_samples};
+        params.num_threads = thread_count;
+        auto result =
+            dbscan::dbscan_grid2d_l1(dataset.x.data(), 1, dataset.y.data(), 1, total_points, params);
+        ankerl::nanobench::doNotOptimizeAway(result.labels);
       });
     }
   }

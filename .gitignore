@@ -33,6 +33,8 @@ Thumbs.db
 # Test data files
 test_data*.bin
 *.bin
+!tests/data/dbscan_static_data.bin
+!tests/data/dbscan_static_truth.bin
 
 # Executables
 dbscan_tests

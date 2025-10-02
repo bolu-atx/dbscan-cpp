@@ -19,6 +19,8 @@ endif()
 add_library(dbscan STATIC
     src/dbscan.cpp
     src/dbscan_optimized.cpp
+    src/dbscan_grid2d_l1.cpp
+    src/dbscan_grid2d_l1_aos.cpp
 )
 
 target_include_directories(dbscan
@@ -64,7 +66,9 @@ FetchContent_MakeAvailable(nanobench)
 add_executable(dbscan_tests
     tests/test_dbscan.cpp
     tests/test_dbscan_optimized.cpp
+    tests/test_dbscan_grid2d_l1.cpp
     tests/test_parallel_for.cpp
+    tests/test_parallelize.cpp
     tests/test_union_find.cpp
 )
 
@@ -75,6 +79,20 @@ target_link_libraries(dbscan_tests
 )
 
 target_include_directories(dbscan_tests
+    PRIVATE
+        include
+)
+
+add_executable(dbscan_dataset_validator
+    tools/dbscan_dataset_validator.cpp
+)
+
+target_link_libraries(dbscan_dataset_validator
+    PRIVATE
+        dbscan
+)
+
+target_include_directories(dbscan_dataset_validator
     PRIVATE
         include
 )
@@ -102,3 +120,11 @@ target_include_directories(dbscan_benchmark
 # Enable testing
 enable_testing()
 add_test(NAME dbscan_tests COMMAND dbscan_tests)
+
+add_test(
+    NAME dbscan_dataset_validation
+    COMMAND ${CMAKE_COMMAND}
+        -DPROJECT_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DPROJECT_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_dataset_validator.cmake
+)
